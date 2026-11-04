@@ -30,7 +30,10 @@ bash scripts/dev-local.sh
 
 **로컬 API 검증**
 
-- API 시작 주소: http://127.0.0.1:8000/ (자동으로 Swagger UI로 이동)\n- Swagger: http://127.0.0.1:8000/docs\n- ReDoc: http://127.0.0.1:8000/redoc\n- OpenAPI JSON: http://127.0.0.1:8000/openapi.json
+- API 시작 주소: http://127.0.0.1:8000/ (자동으로 Swagger UI로 이동)
+- Swagger: http://127.0.0.1:8000/docs
+- ReDoc: http://127.0.0.1:8000/redoc
+- OpenAPI JSON: http://127.0.0.1:8000/openapi.json
 - Health: http://127.0.0.1:8000/api/v4/health
 - Cashflow: http://127.0.0.1:8000/api/v4/users/S01/cashflow?horizon_days=14
 - Tests: `.venv/bin/python -m pytest -q`
