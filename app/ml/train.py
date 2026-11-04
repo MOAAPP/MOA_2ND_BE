@@ -23,7 +23,7 @@ def _examples(ds, train_until, val_until):
         for origin in dates[:-1]:
             target=origin+timedelta(days=1)
             if target not in ledger or ledger[target]["outflow"] is None:continue
-            if origin>=train_until:continue
+            if target>=train_until:continue  # Never train on a label from validation/test dates
             try:
                 row=feature_row(u,ledger,origin,target)
             except ForecastProblem:continue
