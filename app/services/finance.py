@@ -185,8 +185,6 @@ def scheduled_events(u: UserData, account: str, observed: list[dict], anchor: da
         uncertain = direction == 'in' and schedule.get('status') == 'uncertain'
         if uncertain and not include_uncertain:
             continue
-        if schedule.get('kind') in ('credit_card_bill', 'card_payment') and start in billed_dates:
-            continue
         occurrences = []
         if schedule.get('recurrence') == 'once' and schedule.get('date'):
             occurrences = [date.fromisoformat(schedule['date'])]
@@ -197,6 +195,8 @@ def scheduled_events(u: UserData, account: str, observed: list[dict], anchor: da
                 y, zero = divmod(j, 12)
                 occurrences.append(month_date(y, zero + 1, int(schedule['day'])))
         for scheduled_day in occurrences:
+            if schedule.get('kind') in ('credit_card_bill', 'card_payment') and scheduled_day in billed_dates:
+                continue
             if (schedule['id'], scheduled_day) in paid_schedule_refs:
                 continue
             debit_day = scheduled_day + timedelta(days=income_delay_days if direction == 'in' else 0)
