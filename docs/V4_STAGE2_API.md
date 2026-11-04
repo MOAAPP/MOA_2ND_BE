@@ -49,8 +49,7 @@ npm run dev
 ```json
 {
   "user_id": "S01",
-  "text": "[Web발신]\nKB국민체크 승인\n18,500원\n2026/11/05 12:10\n배달의민족",
-  "use_llm_for_unknown": false
+  "text": "[Web발신]\nKB국민체크 승인\n18,500원\n2026/11/05 12:10\n배달의민족"
 }
 ```
 
