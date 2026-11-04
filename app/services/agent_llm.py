@@ -201,7 +201,8 @@ def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date) -
 
 
 def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | None = None,
-              stress: str = "baseline", max_evaluations: int = 72) -> dict:
+              stress: str = "baseline", max_evaluations: int = 72,
+              investment_return_percent: int = 0) -> dict:
     started = perf_counter()
     if uid not in ds.profiles:
         raise KeyError(uid)
@@ -265,7 +266,8 @@ def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | N
         # The validated Python optimizer is independent of planning tool availability.
         audit.append({"tool": "llm_tool_planning", "status": "error", "error": str(exc)[:120]})
     result = search_paths(ds, SearchRequest(conditions=conditions, stress=stress,
-                                           max_evaluations=max_evaluations))
+                                           max_evaluations=max_evaluations,
+                                           investment_return_percent=investment_return_percent))
     inp = float(os.getenv("MOA_AGENT_INPUT_USD_PER_M", "0"))
     out = float(os.getenv("MOA_AGENT_OUTPUT_USD_PER_M", "0"))
     cost = round((tokens["input_tokens"] * inp + tokens["output_tokens"] * out) / 1_000_000, 8) if inp and out else None
