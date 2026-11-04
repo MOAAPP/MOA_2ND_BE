@@ -62,6 +62,7 @@ class WorldCompareRequest(BaseModel):
     purchase_delay_days: int = Field(default=7, ge=1, le=90)
     payment_method: Literal["debit", "transfer", "credit"] = "debit"
     credit_debit_date: date | None = None
+    delayed_credit_debit_date: date | None = None
     savings_amount: int | None = Field(default=None, ge=0)
     savings_date: date | None = None
     savings_monthly_amount: int = Field(default=0, ge=0)
