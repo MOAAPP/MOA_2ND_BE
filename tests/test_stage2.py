@@ -125,3 +125,16 @@ def test_real_dataset_snapshot_is_observed_only_and_isolated():
     assert all(t["user_id"] == "S01" for t in data["transactions"])
     assert all(d["date"] <= data["snapshot_date"] for d in data["daily"])
     assert client.get("/api/v4/users/S99/dataset-snapshot").status_code == 404
+
+
+@pytest.mark.parametrize("user_id", ["S01", "S02", "S20"])
+def test_demo_main_cashflow_uses_dataset_and_loads_at_snapshot(user_id):
+    as_of = load_dataset().meta["snapshot_date"]
+    response = client.get(f"/api/v4/users/{user_id}/confirmed-cashflow",
+                          params={"as_of": as_of, "horizon_days": 14})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["user_id"] == user_id
+    assert body["dataset_id"] == load_dataset().meta["dataset_id"]
+    assert isinstance(body["available_cash"], int)
+    assert all(k in body["future_balances"] for k in ["3", "7", "14"])
