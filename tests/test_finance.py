@@ -294,3 +294,27 @@ def test_unapproved_origin_has_no_cors_access():
     response = client.get('/api/v4/health', headers={'Origin': 'https://untrusted.example'})
     assert response.status_code == 200
     assert 'access-control-allow-origin' not in response.headers
+
+def test_swagger_root_and_openapi_discovery():
+    """Root should guide local developers to usable Swagger instead of a 404."""
+    client = TestClient(app)
+    root = client.get('/', follow_redirects=False)
+    assert root.status_code == 307
+    assert root.headers['location'] == '/docs'
+
+    docs = client.get('/docs')
+    assert docs.status_code == 200
+    assert 'swagger-ui' in docs.text.lower()
+
+    redoc = client.get('/redoc')
+    assert redoc.status_code == 200
+    assert 'redoc' in redoc.text.lower()
+
+    openapi = client.get('/openapi.json')
+    assert openapi.status_code == 200
+    data = openapi.json()
+    assert data['info']['title'] == '평행통장 V4 · 금융 계산 API'
+    assert '/api/v4/health' in data['paths']
+    assert '/api/v4/users/{user_id}/cashflow' in data['paths']
+    assert '/api/v4/cashflow/simulate' in data['paths']
+    assert data['paths']['/api/v4/cashflow/simulate']['post']['summary'] == '가상 구매·소득 변동 시나리오 비교'
