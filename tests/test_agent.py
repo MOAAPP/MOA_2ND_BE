@@ -230,3 +230,28 @@ def test_explicit_investment_loss_changes_only_hypothetical_asset_value():
     assert second.virtual_investment_value < first.virtual_investment_value
     assert second.virtual_investment_profit_loss < first.virtual_investment_profit_loss
     assert second.available_cash == first.available_cash
+
+
+def test_all_eight_whitelisted_financial_tools_execute_against_canonical_dataset():
+    from app.services.agent_llm import TOOL_NAMES
+    ds = load_dataset()
+    uid = "S06"
+    base = {"user_id": uid, "as_of": DAY.isoformat()}
+    args = {
+        "get_financial_state": base,
+        "get_spending_forecast": base,
+        "get_purchase_candidate": base,
+        "simulate_cashflow": base,
+        "simulate_savings": {**base, "amount": 1000},
+        "simulate_investment": {**base, "amount": 1000},
+        "validate_constraints": {**base, "purchase_amount": 1000, "minimum_balance": 0},
+        "compare_scenarios": {**base, "purchase_amount": 1000},
+    }
+    assert set(args) == TOOL_NAMES
+    for name, params in args.items():
+        output = execute_tool(ds, name, params, uid, DAY)
+        assert isinstance(output, dict) and output, name
+        if name == "get_spending_forecast":
+            assert output["model_type"] in ("lightgbm", "recent7", "weekday", "unavailable")
+        if name == "compare_scenarios":
+            assert len(output["paths"]) == 6
