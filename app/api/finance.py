@@ -56,3 +56,29 @@ def get_cashflow(user_id: str, as_of: date | None = Query(default=None),
 @router.post('/cashflow/simulate', response_model=FinancialResult, summary='가상 구매·소득 변동 시나리오 비교', description='simulation_events 또는 외부 forecast_events를 적용한 결과를 산출합니다. 원본 JSON 데이터는 변경하지 않습니다.')
 def simulate(payload: CalculationRequest, ds: Dataset = Depends(dataset_dep)):
     return handle(ds, payload)
+
+@router.get('/users/{user_id}/dataset-snapshot', summary='20명 공통 합성 데이터셋의 사용자별 관측 원본',
+            description='원본 ZIP의 읽기 전용 사용자별 계좌·거래·일정·잔액 기록입니다. 기준일 이후의 숨겨진 미래 기록은 제외합니다.')
+def dataset_snapshot(user_id: str, ds: Dataset = Depends(dataset_dep)):
+    """Expose the actual canonical dataset for the local demo, never a separate frontend fixture."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    try:
+        u = ds.get_user(user_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail={'code': 'user_not_found'}) from error
+    cutoff = date.fromisoformat(ds.meta['snapshot_date'])
+    last_observed_ms = int((datetime.combine(cutoff + timedelta(days=1), datetime.min.time(),
+                        tzinfo=ZoneInfo('Asia/Seoul'))).timestamp() * 1000)
+    observed = [t for t in u.transactions if
+                isinstance(t.get('occurred_at'), (int, float)) and t['occurred_at'] < last_observed_ms]
+    daily = [d for d in u.daily if d.get('date', '') <= cutoff.isoformat()]
+    return {
+        'dataset_id': ds.meta['dataset_id'], 'user_id': user_id,
+        'snapshot_date': cutoff, 'synthetic': True,
+        'profile': u.profile, 'accounts': list(u.accounts),
+        'transactions': observed, 'schedules': list(u.schedules),
+        'daily': daily, 'balance_checks': list(u.balance_checks),
+        'pending_card_liabilities': list(u.pending_card_liabilities),
+        'investments': list(u.investments), 'purchase_intents': list(u.purchase_intents),
+    }
