@@ -17,14 +17,14 @@ class ExternalEvent(BaseModel):
     essential: bool = False
     payment_method: str = 'transfer'
     status: Literal['predicted', 'simulated']
-    source: Literal['model', 'simulation']
+    source: Literal['model', 'rules', 'simulation']
     forecast_run_id: str | None = None
 
     @model_validator(mode='after')
     def check_source(self):
-        if (self.status, self.source) not in {('predicted', 'model'), ('simulated', 'simulation')}:
+        if (self.status, self.source) not in {('predicted', 'model'), ('predicted', 'rules'), ('simulated', 'simulation')}:
             raise ValueError('predicted requires model source; simulated requires simulation source')
-        if self.status == 'predicted' and not self.forecast_run_id:
+        if self.source == 'model' and not self.forecast_run_id:
             raise ValueError('forecast_run_id required for predicted event')
         if self.debit_at.tzinfo is None or (self.occurred_at and self.occurred_at.tzinfo is None):
             raise ValueError('timezone-aware timestamps required')
