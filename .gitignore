@@ -2,6 +2,9 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.pyc
+.env
+.env.local
+app/data/runtime/
 app/data/source/*
 !app/data/source/.gitkeep
 !app/data/source/moa_20users_financial_test_JSON.zip
