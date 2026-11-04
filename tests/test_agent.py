@@ -117,21 +117,20 @@ def test_wrong_user_and_out_of_range_day_are_rejected():
 def test_routes_save_requires_revalidated_recommendation(monkeypatch, tmp_path):
     import app.api.agent as api
     monkeypatch.setattr(api, "SAVE_DIR", tmp_path)
-    p = payload(purchase_amount=10000)
+    p = payload("S06", purchase_amount=7000)
+    p["max_evaluations"] = 12
     r = client.post("/api/v4/agent/search", json=p)
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     routes = r.json()["routes"]
-    if not routes:
-        assert r.json()["status"] == "no_valid_route"
-        return
+    assert routes, "S06 has positive canonical cash constraints; save API must be exercised"
     saved = client.post("/api/v4/agent/routes/save", json={
         "search_request": p, "route_id": routes[0]["id"], "label": "테스트 경로",
     })
     assert saved.status_code == 200, saved.text
     sid = saved.json()["id"]
     assert client.get(f"/api/v4/agent/routes/{sid}?user_id=S02").status_code == 404
-    assert client.get(f"/api/v4/agent/routes/{sid}?user_id=S01").status_code == 200
-    rerun = client.post(f"/api/v4/agent/routes/{sid}/recalculate?user_id=S01")
+    assert client.get(f"/api/v4/agent/routes/{sid}?user_id=S06").status_code == 200
+    rerun = client.post(f"/api/v4/agent/routes/{sid}/recalculate?user_id=S06")
     assert rerun.status_code == 200, rerun.text
     assert rerun.json()["still_valid"] is True
 
