@@ -134,3 +134,82 @@ def test_routes_save_requires_revalidated_recommendation(monkeypatch, tmp_path):
     rerun = client.post(f"/api/v4/agent/routes/{sid}/recalculate?user_id=S01")
     assert rerun.status_code == 200, rerun.text
     assert rerun.json()["still_valid"] is True
+
+
+def test_real_tool_dispatch_with_scripted_provider_call_and_token_audit(monkeypatch):
+    """Model responses are scripted. All numeric results come from actual Python tools."""
+    from types import SimpleNamespace
+    from app.services.agent_llm import run_agent
+    from app.services import agent_llm
+
+    class Message:
+        def __init__(self, calls):
+            self.tool_calls = calls
+        def model_dump(self, exclude_none=True):
+            return {"role": "assistant", "tool_calls": [
+                {"id": c.id, "type": "function",
+                 "function": {"name": c.function.name, "arguments": c.function.arguments}}
+                for c in self.tool_calls
+            ]}
+
+    def response(name=None, args=None, tokens_in=20, tokens_out=10):
+        calls = ([SimpleNamespace(id="test_" + name,
+                   function=SimpleNamespace(name=name, arguments=__import__("json").dumps(args)))
+                  ] if name else [])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=Message(calls))],
+            usage=SimpleNamespace(prompt_tokens=tokens_in, completion_tokens=tokens_out),
+        )
+
+    replies = iter([
+        response("set_financial_conditions", {
+            "purchase_required": False, "purchase_amount": 7000,
+            "investment_allowed": False, "maximum_investment_amount": 0,
+            "allowed_payment_methods": ["debit"],
+            "hard_constraints": ["월세는 반드시 결제"],
+            "soft_preferences": ["가능하면 구매"],
+            "confirmations_required": [],
+        }),
+        response("get_financial_state", {"user_id": "S01", "as_of": "2026-11-04"}),
+        response(),
+    ])
+    fake = SimpleNamespace(chat=SimpleNamespace(
+        completions=SimpleNamespace(create=lambda **kwargs: next(replies))))
+    monkeypatch.setattr(agent_llm, "_client", lambda: fake)
+    out = run_agent(load_dataset(), "S01", DAY,
+                    "7000원 운동화를 사고 싶지만 월세는 반드시 납부해야 해요", max_evaluations=4)
+    assert out["tool_execution_log"][0]["tool"] == "get_financial_state"
+    assert out["tool_execution_log"][0]["status"] == "ok"
+    assert out["tool_success_rate"] == 1.0
+    assert out["tokens"] == {"input_tokens": 60, "output_tokens": 30}
+    assert out["numbers_source"] == "python_engine_and_ml_only"
+    assert out["conditions"]["purchase_amount"] == 7000
+
+
+def test_model_invented_price_is_not_accepted(monkeypatch):
+    from types import SimpleNamespace
+    from app.services.agent_llm import parse_conditions
+    class FakeMsg:
+        tool_calls = [SimpleNamespace(function=SimpleNamespace(
+            name="set_financial_conditions",
+            arguments='{"purchase_amount":99999,"purchase_required":true}'
+        ))]
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **kw: SimpleNamespace(
+            choices=[SimpleNamespace(message=FakeMsg())],
+            usage=SimpleNamespace(prompt_tokens=20, completion_tokens=5),
+        ))))
+    parsed, _ = parse_conditions(fake, "fake-test-model",
+                                 "운동화를 반드시 사고 싶어요", "S01", DAY)
+    assert parsed.purchase_amount is None
+    assert any("purchase_amount" in item for item in parsed.confirmations_required)
+    assert search_paths(load_dataset(), SearchRequest(conditions=parsed)).status == "needs_confirmation"
+
+
+def test_unknown_free_text_hard_rule_never_silently_passes():
+    g = GoalConditions(user_id="S01", as_of=DAY, purchase_amount=7000,
+                       hard_constraints=["특별 대출 계약 조건 준수"])
+    result = search_paths(load_dataset(), SearchRequest(conditions=g, max_evaluations=4))
+    assert result.status == "needs_confirmation"
+    assert result.routes == []
+    assert any("특별 대출" in item for item in result.confirmations_required)
