@@ -5,11 +5,12 @@ from fastapi.responses import RedirectResponse
 
 from app.api.finance import router
 from app.api.stage2 import router as sms_router, purchase_router
+from app.api.stage3 import router as stage3_router
 from app.core.settings import CORS_ORIGINS
 
 app = FastAPI(
     title="평행통장 V4 · 금융 계산 API",
-    version="4.0.0-stage2",
+    version="4.0.0-stage3",
     summary="합성 금융 데이터를 이용한 결제계좌 현금흐름 계산·시뮬레이션",
     description=(
         "## 시작하기\n"
@@ -31,7 +32,8 @@ app = FastAPI(
         "name": "v4-stage2-sms", "description": "규칙 기반 SMS 파싱·사용자 확인·거래 저장·잔액 반영",
     }, {
         "name": "v4-stage2-vision", "description": "비전 LLM 분석·구매 후보 저장·실거래와 독립된 가상 시뮬레이션",
-    }],
+    }, {"name": "v4-stage3-digital-twin", "description": "20명 공통 데이터 기반 홈·6경로 비교·저장·ML 입력"},
+    ],
 )
 
 app.add_middleware(
@@ -44,6 +46,7 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(sms_router)
 app.include_router(purchase_router)
+app.include_router(stage3_router)
 
 
 @app.get("/", include_in_schema=False)
