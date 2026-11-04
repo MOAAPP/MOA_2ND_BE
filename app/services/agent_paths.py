@@ -158,6 +158,25 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         missing.append("저축을 유지할 최소 납입 금액을 확인해 주세요. 원본 데이터에 목표 금액이 없어요.")
     if "credit" in g.allowed_payment_methods and not g.credit_debit_date:
         missing.append("신용카드 결제계좌 출금일을 확인해 주세요.")
+    # Free-text mandatory rules are untrusted until mapped to an implemented
+    # numeric/date/engine check. Never claim that an unsupported rule passed.
+    for rule in g.hard_constraints:
+        text = rule.replace(" ", "").lower()
+        if any(w in text for w in ("월세", "카드대금", "카드청구", "필수결제", "공과금", "임대료", "청구액")):
+            if not g.protect_essential_bills:
+                missing.append("필수결제 보호 조건을 확인해 주세요.")
+        elif any(w in text for w in ("최소잔액", "현금잔액", "잔고", "계좌마이너스")):
+            if g.minimum_balance is None:
+                missing.append("반드시 유지할 최소 현금 잔액을 숫자로 확인해 주세요.")
+        elif any(w in text for w in ("저축", "적금", "여행자금")):
+            if g.required_savings_amount is None:
+                missing.append("반드시 유지할 저축 납입 금액을 확인해 주세요.")
+        elif any(w in text for w in ("구매", "구입", "사야", "사기")):
+            if not g.purchase_required:
+                missing.append("반드시 구매할 조건인지 확인해 주세요.")
+        else:
+            missing.append("현재 검증 엔진에서 처리할 수 없는 필수 조건: " + rule[:80])
+
     if missing:
         return SearchResult(user_id=g.user_id, as_of=g.as_of, dataset_id=ds.meta["dataset_id"],
                             status="needs_confirmation", routes=[], evaluated_count=0,
