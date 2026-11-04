@@ -144,3 +144,38 @@ def test_ml_interface_no_oracle_future_labels():
     data = response.json()
     assert data["is_trained_ml_output"] is False
     assert all(d["date"] <= "2026-11-04" for d in data["recent_observed_variable_expenses"])
+
+
+def test_virtual_etf_sale_settlement_realized_gain_and_remaining_holdings():
+    original = get_result(investment_amount=50000)
+    price = original["reference_investment_price"]
+    assert price is not None
+    sell = get_result(investment_amount=50000, virtual_sell_qty=1,
+                      virtual_sell_unit_price=price+1000,
+                      virtual_sell_date="2026-11-07")
+    baseline = paths(sell)["no_purchase"]
+    investment = paths(sell)["virtual_investment"]
+    assert investment["status"] == "calculated"
+    assert investment["investment_quantity"] == 1
+    assert investment["virtual_investment_realized_profit_loss"] == 1000
+    assert investment["virtual_investment_profit_loss"] == 1000
+    assert investment["future_balances"]["14"] == baseline["future_balances"]["14"] - price + 1000
+    assert any(e["event_type"] == "virtual_investment_sell" for e in investment["events"])
+
+
+def test_delayed_credit_settlement_requires_separate_confirmed_debit_date():
+    confirmation = get_result(
+        payment_method="credit",
+        credit_debit_date="2026-11-12",
+        delayed_credit_debit_date="2026-11-15")
+    p=paths(confirmation)
+    assert p["purchase_now"]["status"] == "calculated"
+    assert p["purchase_delay"]["status"] == "calculated"
+    assert any(e["debit_at"].startswith("2026-11-15") for e in p["purchase_delay"]["events"])
+    assert any(e["debit_at"].startswith("2026-11-12") for e in p["purchase_now"]["events"])
+
+
+def test_selling_without_valid_holdings_is_rejected():
+    bad = client.post("/api/v4/scenarios/compare", json={**BASE,
+        "investment_amount": 1000, "virtual_sell_qty": 1, "virtual_sell_unit_price": 25000})
+    assert bad.status_code == 422
