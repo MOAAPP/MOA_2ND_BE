@@ -65,12 +65,23 @@ TOOL_SPEC = [
     ("compare_scenarios", "Compare the six existing Python finance paths, no invented numbers.", {
         "user_id": {"type": "string"}, "as_of": {"type": "string"}, "purchase_amount": {"type": "integer"}}),
 ]
+def _tool_required(name: str) -> list[str]:
+    required = ["user_id", "as_of"]
+    if name in ("simulate_savings", "simulate_investment"):
+        required.append("amount")
+    if name in ("validate_constraints", "compare_scenarios"):
+        required.append("purchase_amount")
+    if name == "validate_constraints":
+        required.append("minimum_balance")
+    return required
+
+
 FINANCE_TOOLS = [{
     "type": "function",
     "function": {
         "name": name, "description": description,
         "parameters": {"type": "object", "additionalProperties": False,
-                       "properties": fields, "required": ["user_id", "as_of"]},
+                       "properties": fields, "required": _tool_required(name)},
     },
 } for name, description, fields in TOOL_SPEC]
 TOOL_NAMES = {name for name, _, _ in TOOL_SPEC}
@@ -157,6 +168,11 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
 def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date) -> dict:
     if name not in TOOL_NAMES:
         raise AgentFailure("tool_not_allowed")
+    spec = next(fields for tool_name, _, fields in TOOL_SPEC if tool_name == name)
+    if not isinstance(payload, dict) or set(payload) - set(spec):
+        raise AgentFailure("invalid_tool_arguments")
+    if any(field not in payload for field in _tool_required(name)):
+        raise AgentFailure("missing_required_tool_argument")
     if payload.get("user_id") != uid or payload.get("as_of") != as_of.isoformat():
         raise AgentFailure("cross_user_or_date_tool_call")
     def check_amount(key: str):
