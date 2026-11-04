@@ -291,7 +291,7 @@ def calculate(ds: Dataset, req: CalculationRequest, observed_overlay: list[dict]
     if observed_overlay:
         warnings.append('confirmed_sms_overlay_applied_after_dataset_snapshot_only')
     warnings.extend(['dataset_is_synthetic_not_real_bank_data', 'future_scenario_transactions_excluded'])
-    warnings.append('no_ml_predictions_provided' if not req.forecast_events else 'caller_provided_ml_forecast_unverified')
+    warnings.append('no_ml_predictions_provided' if not req.forecast_events else ('rule_based_baseline_not_trained_ml' if all(e.source == 'rules' for e in req.forecast_events) else 'caller_provided_ml_forecast_unverified'))
     if req.minimum_required_balance is None:
         warnings.append('minimum_required_balance_missing_zero_overdraft_threshold_only')
     if not u.profile.get('savings_goal') and not ds.raw.get('savings_goals'):
