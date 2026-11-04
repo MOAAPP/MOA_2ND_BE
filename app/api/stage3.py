@@ -14,6 +14,7 @@ from app.schemas import CalculationRequest
 from app.services.dataset import Dataset
 from app.services.finance import FinanceProblem, calculate, state_for, kst
 from app.services.stage3 import compare_worlds
+from app.ml.forecast import run_forecast, to_events, ForecastProblem
 from app.stage3_models import WorldCompareRequest, WorldCompareResult
 
 router = APIRouter(prefix="/api/v4", tags=["v4-stage3-digital-twin"])
@@ -70,6 +71,14 @@ def user_home(user_id: str, as_of: date | None = Query(default=None),
     try:
         req = CalculationRequest(user_id=user_id, as_of=day, horizon_days=14)
         state = state_for(ds, req)
+        try:
+            variable_forecast = run_forecast(ds, user_id, day, 14)
+        except ForecastProblem as exc:
+            variable_forecast = {"model_type": "unavailable", "data_quality_status": "unavailable",
+                                 "error": str(exc), "daily": [], "forecasts": []}
+        # Never silently invent a model or subtract a cumulative forecast every day.
+        if variable_forecast["model_type"] != "unavailable":
+            req = req.model_copy(update={"forecast_events": to_events(u, variable_forecast)})
         result = calculate(ds, req)
     except FinanceProblem as exc:
         raise HTTPException(422, {"code": "invalid_financial_request", "message": str(exc)}) from exc
@@ -109,6 +118,7 @@ def user_home(user_id: str, as_of: date | None = Query(default=None),
         "virtual_investments": state.virtual_investments,
         "purchase_candidates": candidates[-5:],
         "warnings": result.warnings,
+        "variable_forecast": variable_forecast,
     }
 
 

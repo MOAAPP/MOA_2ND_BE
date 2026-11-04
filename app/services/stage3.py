@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.schemas import CalculationRequest, ExternalEvent
 from app.services.dataset import Dataset
+from app.ml.forecast import run_forecast, to_events, ForecastProblem
 from app.services.finance import KST, FinanceProblem, calculate
 from app.stage3_models import (
     WorldCompareRequest, WorldCompareResult, ScenarioPath,
@@ -91,7 +92,20 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
     base = calculate(ds, CalculationRequest(user_id=u.user_id, account_id=account,
                                             as_of=day, horizon_days=req.horizon_days,
                                             minimum_required_balance=req.minimum_required_balance))
-    spend, spend_origin = _observed_spend(u, day, req.forecast_daily_spend_override)
+    # Stage 4 uses the SAME read-only prediction before branching into six worlds.
+    forecast_data = None
+    if req.forecast_daily_spend_override is not None:
+        spend_origin = 'explicit_daily_spend_assumption_not_ml'
+        spend = req.forecast_daily_spend_override
+    else:
+        try:
+            forecast_data = run_forecast(ds, u.user_id, day, req.horizon_days)
+        except ForecastProblem as exc:
+            raise FinanceProblem(f'variable_forecast_unavailable:{exc}') from exc
+        if forecast_data['model_type'] == 'unavailable':
+            raise FinanceProblem('not_enough_complete_observations_for_spend_forecast')
+        spend_origin = f"{forecast_data['model_type']}:{forecast_data['model_version']}"
+        spend = round(sum(d['amount'] for d in forecast_data['daily']) / req.horizon_days)
     instrument = req.investment_code or next(
         (r["code"] for r in reversed(u.investments) if r.get("date", "") <= day.isoformat()
          and not r.get("future_scenario")), None)
@@ -116,24 +130,38 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
     horizon_end = day + timedelta(days=req.horizon_days)
     high_spend = req.stress in ("higher_spending", "combined")
     delay_income = req.income_delay_days if req.stress in ("delayed_income", "combined") else 0
-    daily_spend = spend + (round(spend * req.daily_spend_increase_percent / 100) if high_spend else 0)
-    # Forecast input: explicit, deterministic non-ML baseline; same in all six paths.
-    forecast = [
-        ExternalEvent(
-            id=f"baseline:variable:{d.isoformat()}", user_id=u.user_id,
-            account_id=account, debit_at=_at(d), amount=-daily_spend,
-            kind="variable_expense_baseline", label="관측 지출의 일평균 기준선",
-            payment_method="debit", status="predicted", source="rules",
-            forecast_run_id=f"rules:{day.isoformat()}:{spend_origin}",
-        )
-        for i in range(1, req.horizon_days + 1)
-        for d in [day + timedelta(days=i)]
-    ]
+    if forecast_data is None:
+        # A deliberate user assumption, not an ML output.
+        daily_spend = spend + (round(spend * req.daily_spend_increase_percent / 100) if high_spend else 0)
+        forecast = [
+            ExternalEvent(
+                id=f"assumption:variable:{d.isoformat()}", user_id=u.user_id,
+                account_id=account, debit_at=_at(d), amount=-daily_spend,
+                kind="variable_expense_assumption", label="직접 입력한 일별 지출 가정",
+                payment_method="debit", status="predicted", source="rules",
+                forecast_run_id=f"assumption:{day}:{spend}",
+            )
+            for i in range(1, req.horizon_days + 1)
+            for d in [day + timedelta(days=i)]
+        ]
+    else:
+        if high_spend:
+            # Documented, editable stress assumption; no fabricated risk probability.
+            pct = req.daily_spend_increase_percent
+            stress_data = dict(forecast_data)
+            stress_data["upper_scenario"] = {
+                "daily": [{"date": row["date"], "amount": round(row["amount"] * (1 + pct / 100))}
+                          for row in forecast_data["daily"]],
+                "kind": "assumption_not_calibrated", "increase_percent": pct,
+            }
+            forecast = to_events(u, stress_data, upper=True)
+        else:
+            forecast = to_events(u, forecast_data)
 
     worlds = []
     for sid in LABELS:
         events: list[ScenarioEvent] = []
-        notes = [spend_origin, "baseline_is_not_trained_ml"]
+        notes = [spend_origin, "synthetic_forecast_not_real_user_validated"]
         if req.allocation is None and sid == "mixed":
             notes.append("editable_40_30_20_10_allocation_assumption_not_user_record")
         needs_confirmation = False
