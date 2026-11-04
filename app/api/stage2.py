@@ -85,12 +85,11 @@ def effective_rows(ds: Dataset, user_id: str) -> list[dict]:
 
 
 @router.post("/sms/analyze", response_model=SmsAnalysis, summary="금융 결제 문자 규칙 파싱 및 중복 탐지",
-             description="정형 SMS는 규칙 파서만 사용합니다. 비정형 문자에 use_llm_for_unknown=true를 지정할 때만 마스킹 후 LLM 호출 가능. 원문은 저장하지 않습니다.")
+             description="모든 금융 결제 문자는 규칙 기반 파서만 사용합니다. 외부 AI에 문자를 보내지 않으며 원문은 저장하지 않습니다. 비정형 문자도 수동 확인만 허용합니다.")
 async def sms_analyze(request: SmsAnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
     ensure_user(ds, request.user_id)
     try:
-        result = await analyze_sms(request.user_id, request.text, datetime.now(KST).date(),
-                                   request.use_llm_for_unknown)
+        result = await analyze_sms(request.user_id, request.text, datetime.now(KST).date())
     except RuntimeError as exc:
         fail("sms_llm_unavailable", str(exc), 503)
     except Exception as exc:
