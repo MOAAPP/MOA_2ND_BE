@@ -145,7 +145,7 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
         if purchase_amount:
             credit = req.payment_method == "credit"
             # For delayed credit purchases a NEW settlement date must be confirmed.
-            debit_day = req.credit_debit_date if sid != "purchase_delay" else None
+            debit_day = req.delayed_credit_debit_date if sid == "purchase_delay" else req.credit_debit_date
             if credit and (debit_day is None or debit_day < purchase_day):
                 needs_confirmation = True
                 notes.append("credit_settlement_date_requires_confirmation")
@@ -205,12 +205,19 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
             elif e.event_type == "savings_adjustment":
                 cash_items.append(_cash_event(e, -e.amount if e.metadata.get("direction") != "withdraw" else e.amount))
             elif e.event_type == "income_delay":
-                notes.append("income_delay_custom_event_use_request_stress")
+                days_late = e.metadata.get("delay_days")
+                if type(days_late) is not int or not (0 <= days_late <= 31):
+                    raise FinanceProblem("income_delay_event_requires_integer_delay_days_0_31")
+                notes.append(f"custom_income_delay_{days_late}_days")
+        path_income_delay = delay_income
+        for event in events:
+            if event.event_type == "income_delay":
+                path_income_delay = int(event.metadata["delay_days"])
         try:
             result = calculate(ds, CalculationRequest(
                 user_id=u.user_id, account_id=account, as_of=day,
                 horizon_days=req.horizon_days, minimum_required_balance=req.minimum_required_balance,
-                income_delay_days=delay_income, forecast_events=forecast,
+                income_delay_days=path_income_delay, forecast_events=forecast,
                 simulation_events=[] if needs_confirmation or invalid else cash_items,
             ))
         except ValueError as ex:
