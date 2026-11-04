@@ -148,7 +148,7 @@ def feature_row(u, ledger: dict, origin: date, target: date):
 
 
 def baseline_daily(ledger, origin, target, method):
-    past = [v for d,v in sorted(ledger.items()) if d <= origin and v["outflow"] is not None]
+    past = [v["outflow"] for d,v in sorted(ledger.items()) if d <= origin and v["outflow"] is not None]
     if not past: raise ForecastProblem("no_complete_observation")
     if method == "recent7":
         return _mean(_past(ledger,origin,7)) if any(x is not None for x in _past(ledger,origin,7)) else _mean(past[-7:])
@@ -231,7 +231,7 @@ def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None):
         "observed_days":sum(x["outflow"] is not None for x in ledger.values()),
         "horizon_days":horizon,"daily":daily,
         "forecasts":[{"horizon_days":n,"predicted_variable_outflow":sum(x["amount"] for x in daily[:n])}
-                     for n in (3,7,14) if n<=horizon],
+                     for n in (3,7,14) if n<=horizon and selected!="unavailable"],
         "upper_scenario":{"kind":"assumption_not_calibrated","increase_percent":25,
                           "daily":[{"date":x["date"],"amount":round(x["amount"]*1.25),"method":x["method"]} for x in daily]},
         "is_synthetic":True,"candidate_purchases_included":False,

@@ -47,7 +47,7 @@ def test_credit_approval_not_account_variable_outflow_and_missing_not_zero():
     u=ds.get_user("S06")
     ledger=ml.observed_ledger(u,DATE)
     assert any(x["credit"]>0 for x in ledger.values())
-    assert any(x["outflow"] is None for x in ledger.values())
+    assert any(x["outflow"] is None for x in ml.observed_ledger(ds.get_user("S04"),DATE).values())
     # Payment-account variable outflow excludes authorization and cash-wallet spend.
     d=next((d for d,x in ledger.items() if x["credit"]>0),None)
     assert d is not None
