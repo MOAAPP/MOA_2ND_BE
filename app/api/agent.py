@@ -143,7 +143,7 @@ def dataset_audit(ds: Dataset = Depends(dataset_dep)):
             problems.append(f"{uid}:missing_account")
         if not user.daily:
             problems.append(f"{uid}:missing_daily")
-        if user.profile.get("payment_account_id") not in {a.get("id") for a in user.accounts}:
+        if user.profile.get("payment_account_id") not in {a.get("account_id") for a in user.accounts}:
             problems.append(f"{uid}:payment_account_not_found")
     return {"dataset_id": ds.meta["dataset_id"], "synthetic": True,
             "user_count": len(user_ids), "user_ids": user_ids, "default_user_id": __import__("app.core.settings", fromlist=["DEFAULT_DEMO_USER_ID"]).DEFAULT_DEMO_USER_ID,
