@@ -73,7 +73,7 @@ def _event(sid, uid, kind, day, amount, account, method="transfer",
 def _cash_event(item, amount):
     return ExternalEvent(
         id=item.event_id, user_id=item.user_id, account_id=item.account_id,
-        debit_at=item.debit_at, amount=amount,
+        debit_at=item.debit_at or _at(item.effective_at), amount=amount,
         kind=item.event_type, label=item.metadata.get("name", item.event_type),
         essential=False, payment_method=item.payment_method,
         status="simulated", source="simulation",
@@ -123,7 +123,7 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
             id=f"baseline:variable:{d.isoformat()}", user_id=u.user_id,
             account_id=account, debit_at=_at(d), amount=-daily_spend,
             kind="variable_expense_baseline", label="관측 지출의 일평균 기준선",
-            payment_method="debit", status="predicted", source="model",
+            payment_method="debit", status="predicted", source="rules",
             forecast_run_id=f"rules:{day.isoformat()}:{spend_origin}",
         )
         for i in range(1, req.horizon_days + 1)
