@@ -4,7 +4,7 @@
 
 - 서비스는 React + Vite와 Python + FastAPI 2개 프로세스, 공통 합성 20명 원본 ZIP으로 동작합니다. 새 DB 없음.
 - 원본 ZIP은 SHA256 검증 및 읽기 전용, 추가 기록은 `app/data/runtime/S01.json` 등 사용자별 JSON 오버레이입니다. 이 경로는 Git에서 제외되며 **개발용 단일 프로세스** 전제입니다.
-- SMS는 정형 형식 규칙 파서(기본 LLM 0회) → 중복·불확실성 표시 → 수정·확인 → 거래 overlay 저장입니다. 비정형 SMS만 요청 시 마스킹 후 텍스트 LLM 호출합니다.
+- SMS는 **모든 형식을 규칙 기반으로만 파싱(LLM 호출 0회)** → 중복·불확실성 표시 → 수정·확인 → 거래 overlay 저장입니다. 비정형 SMS는 사용자가 직접 필드를 확인하며 외부 AI로 전송하지 않습니다.
 - 쇼핑몰 이미지 업로드는 PNG/JPEG/WebP, 8 MB, 최대 1800만 화소 검증 후 EXIF를 제거하고 **실제** OpenAI 비전 API를 호출합니다. 분석 실패·키 없음은 오류입니다. OCR 규칙 결과로 성공을 가장하지 않습니다.
 - 3단계 이전의 실제 구매는 별도 수동 기록입니다. 구매 후보를 확정해도 계좌 잔액이 바뀌지 않습니다. 가상 시뮬레이션 API를 사용해야만 해당 계산의 `simulation_events`에 반영됩니다.
 - **보안 주의:** 지금은 실사용 서비스가 아닌 인증 없는 로컬 합성 데모입니다. 실계좌 SMS를 공개 API로 받지 마세요. 카드·계좌 번호, 주민번호 등 입력을 최소화하세요.
@@ -43,7 +43,7 @@ npm run dev
 ## Swagger 2단계 검증 순서
 
 1. `GET /api/v4/health` → 200, `status=ok`, `users=20`, `synthetic=true`.
-2. `GET /api/v4/users/S01/state` → 원본 snapshot 기준 계좌 정보.
+2. `GET /api/v4/users/S01/state` → 원본 snapshot 기준 계좌 정보.\n   `GET /api/v4/users/S01/dataset-snapshot` → 공통 20명 ZIP의 S01 원본 관측 거래·일별 잔액·고정 일정(프론트 홈의 주 데이터).
 3. `POST /api/v4/sms/analyze`에 아래 JSON → rule parser, `llm_called=false`, `transactions[0]` 중복 여부와 `uncertainty` 확인:
 
 ```json
@@ -111,4 +111,4 @@ npm run dev
 
 ## 구현되지 않았거나 제한된 부분
 
-실제 비전·LLM API 호출의 성공률·속도·토큰 비용은 로컬 키와 50장 정답 이미지가 없어 미측정입니다. 프론트엔드 기존 로컬 원장 및 Python SMS 오버레이의 완전한 단일 원장화는 후속 통합 작업으로 남습니다. 로컬 JSON 오버레이는 별도 사용자 인증/공유 서버 동시성에 적합하지 않습니다. 공용 배포는 기존 Node API 중심이며 로컬 FastAPI와 자동 연결되지 않습니다.
+실제 비전 API 호출의 성공률·속도·토큰 비용은 로컬 키와 50장 정답 이미지가 없어 미측정입니다. 프론트엔드 기존 로컬 원장 및 Python SMS 오버레이의 완전한 단일 원장화는 후속 통합 작업으로 남습니다. 로컬 JSON 오버레이는 별도 사용자 인증/공유 서버 동시성에 적합하지 않습니다. 공용 배포는 기존 Node API 중심이며 로컬 FastAPI와 자동 연결되지 않습니다.
