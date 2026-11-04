@@ -265,3 +265,32 @@ def test_short_horizon_minimum_cushion_matches_returned_low(dataset):
     assert len(result.daily_cashflow) == 3
     assert result.minimum_cash_cushion == result.minimum_balance - 20000
     assert result.minimum_balance == min([result.available_cash] + [d.lowest_balance for d in result.daily_cashflow])
+
+
+@pytest.mark.parametrize('origin', ['http://localhost:5173', 'http://127.0.0.1:5173'])
+def test_local_react_cors_get_and_post_preflight(origin):
+    """Direct requests from either local Vite origin, including JSON POST preflight."""
+    client = TestClient(app)
+    response = client.get('/api/v4/health', headers={'Origin': origin})
+    assert response.status_code == 200
+    assert response.headers['access-control-allow-origin'] == origin
+
+    preflight = client.options(
+        '/api/v4/cashflow/simulate',
+        headers={
+            'Origin': origin,
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'content-type',
+        },
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.headers['access-control-allow-origin'] == origin
+    assert 'POST' in preflight.headers['access-control-allow-methods']
+    assert 'content-type' in preflight.headers['access-control-allow-headers'].lower()
+
+
+def test_unapproved_origin_has_no_cors_access():
+    client = TestClient(app)
+    response = client.get('/api/v4/health', headers={'Origin': 'https://untrusted.example'})
+    assert response.status_code == 200
+    assert 'access-control-allow-origin' not in response.headers

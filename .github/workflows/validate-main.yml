@@ -1,0 +1,27 @@
+name: V4 FastAPI tests (local-first)
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Dataset, API, and CORS verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify original synthetic dataset SHA-256
+        run: |
+          echo "9e2adc5a7aa7720ef8daf24f8766389233dee399c0ea0826f9dc3a90aaeab609  app/data/source/moa_20users_financial_test_JSON.zip" | sha256sum --check -
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run FastAPI and CORS tests
+        run: python -m pytest -q
