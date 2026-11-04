@@ -171,6 +171,8 @@ def _quality(ledger, as_of):
 def load_artifact():
     manifest = MODEL_DIR/"metadata.json"
     model_file = MODEL_DIR/"variable_spend.txt"
+    if manifest.is_file() != model_file.is_file():
+        raise ForecastProblem("model_artifact_incomplete")
     if not (manifest.is_file() and model_file.is_file()):
         return None,None
     try:
@@ -202,7 +204,7 @@ def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None):
         selected="unavailable"
     if selected=="lightgbm" and not model:
         raise ForecastProblem("selected_model_artifact_missing")
-    if meta and _day(meta["training_data_cutoff"]) >= as_of:
+    if meta and selected!="unavailable" and _day(meta["training_data_cutoff"]) >= as_of:
         # An evaluation-time test can legitimately use an earlier, fixed model.
         # Never use a model whose training labels extend beyond the prediction origin.
         selected="weekday"

@@ -96,6 +96,8 @@ def test_real_lgbm_training_artifact_validation_and_test_are_separate(tmp_path,m
     b=ml.run_forecast(load_dataset(),"S01",DATE)
     assert a==b
     assert a["model_type"]==meta["selected_model"]
+    first=ml.run_forecast(load_dataset(),"S01",date(2026,9,11))
+    assert first["model_type"]=="unavailable" and first["forecasts"]==[]
     response=client.get("/api/v4/users/S01/forecast?as_of=2026-11-04")
     assert response.status_code==200,response.text
     assert response.json()["forecast_run_id"]==a["forecast_run_id"]
