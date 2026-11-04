@@ -27,6 +27,7 @@ class AnalyzeRequest(BaseModel):
     overrides: dict = Field(default_factory=dict)
     stress: str = Field(default="baseline", pattern="^(baseline|higher_spending|delayed_income|combined|investment_loss)$")
     max_evaluations: int = Field(default=72, ge=1, le=150)
+    investment_return_percent: int = Field(default=0, ge=-100, le=0, description="Explicit hypothetical loss scenario only")
 
 
 class SaveRouteRequest(BaseModel):
@@ -42,7 +43,7 @@ def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
         raise HTTPException(404, {"code": "user_not_found", "user_id": payload.user_id})
     try:
         return run_agent(ds, payload.user_id, payload.as_of, payload.goal, payload.overrides,
-                         payload.stress, payload.max_evaluations)
+                         payload.stress, payload.max_evaluations, payload.investment_return_percent)
     except AgentFailure as exc:
         raise HTTPException(503, {"code": "llm_unavailable", "message": str(exc),
                                   "basic_parallel_worlds_unchanged": True}) from exc
