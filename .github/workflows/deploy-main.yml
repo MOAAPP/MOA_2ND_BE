@@ -1,0 +1,84 @@
+name: Verify and deploy FastAPI to Cloudtype
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudtype-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Verify dataset and run pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify original synthetic dataset SHA-256
+        run: |
+          echo "9e2adc5a7aa7720ef8daf24f8766389233dee399c0ea0826f9dc3a90aaeab609  app/data/source/moa_20users_financial_test_JSON.zip" | sha256sum --check -
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run backend tests
+        run: python -m pytest -q
+
+  deploy:
+    name: Deploy to Cloudtype only after passing tests
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Cloudtype secrets are configured
+        id: cloudtype-auth
+        env:
+          CLOUDTYPE_TOKEN: ${{ secrets.CLOUDTYPE_TOKEN }}
+          GHP_TOKEN: ${{ secrets.GHP_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -n "$CLOUDTYPE_TOKEN" && -n "$GHP_TOKEN" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Cloudtype deployment skipped until CLOUDTYPE_TOKEN and GHP_TOKEN are registered as GitHub Actions repository secrets."
+          fi
+      - name: Checkout
+        if: steps.cloudtype-auth.outputs.ready == 'true'
+        uses: actions/checkout@v4
+      - name: Connect deploy key
+        if: steps.cloudtype-auth.outputs.ready == 'true'
+        uses: cloudtype-github-actions/connect@v1
+        with:
+          token: ${{ secrets.CLOUDTYPE_TOKEN }}
+          ghtoken: ${{ secrets.GHP_TOKEN }}
+      - name: Deploy
+        if: steps.cloudtype-auth.outputs.ready == 'true'
+        uses: cloudtype-github-actions/deploy@v1
+        with:
+          token: ${{ secrets.CLOUDTYPE_TOKEN }}
+          project: thotemily/moa-2nd-be
+          stage: main
+          yaml: |
+            name: moa-2nd-be
+            app: python@3.12
+            options:
+              ports: "8000"
+              start: uvicorn app.main:app --host 0.0.0.0 --port 8000
+              install: pip install -r requirements.txt
+              env:
+                - name: MOA_CORS_ORIGINS
+                  value: https://parallel-bank.vercel.app
+            context:
+              git:
+                url: git@github.com:${{ github.repository }}.git
+                ref: ${{ github.ref }}

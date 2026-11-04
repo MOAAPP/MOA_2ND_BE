@@ -39,3 +39,23 @@ SHA-256 (원본 ZIP): `9e2adc5a7aa7720ef8daf24f8766389233dee399c0ea0826f9dc3a90a
 [API 실행 및 계산 규칙](docs/V4_STAGE1_API.md) · [데이터 분석 및 정합성 검증](docs/V4_STAGE1_DATA_AUDIT.md)
 
 금융 데이터셋은 합성 데이터를 이용한 검증용입니다. 인증 없는 시연 API로 실데이터를 서비스하지 마세요. 운영 계정 조회 및 사용자 쓰기 기능은 인증·인가, 보안, 접근 격리를 마련한 뒤 도입해야 합니다.
+
+
+## Cloudtype 자동 배포 (GitHub Actions)
+
+[워크플로우](.github/workflows/deploy-main.yml)는 `main`의 코드 변경에 따라 다음 순서로 실행됩니다.
+
+1. 원본 합성 데이터셋 SHA-256 검증
+2. Python 3.12 의존성 설치 및 전체 `pytest` 실행
+3. 성공하고 **GitHub Actions Secrets**의 `CLOUDTYPE_TOKEN`과 `GHP_TOKEN`이 모두 설정되어 있을 때만 Cloudtype `thotemily/moa-2nd-be` / `main` 배포
+
+**처음 한 번 해야 하는 설정:** GitHub `MOAAPP/MOA_2ND_BE` → Settings → Secrets and variables → Actions → Repository secrets에 다음 두 값을 등록합니다.
+
+- `CLOUDTYPE_TOKEN`: Cloudtype **API Key** (Deploy Key가 아님)
+- `GHP_TOKEN`: Cloudtype 공식 GitHub Actions 통합에서 요구하는 GitHub Personal Access Token(권한 및 만료기한은 Cloudtype 공식 문서 참고)
+
+토큰은 코드, 채팅, README, 커밋에 기록하면 안 됩니다. 토큰이 등록되지 않은 동안은 테스트만 실행되고 배포는 명시적으로 건너뜁니다.
+
+**배포 구성:** Python 3.12, `pip install -r requirements.txt`, `uvicorn app.main:app --host 0.0.0.0 --port 8000`, `MOA_CORS_ORIGINS=https://parallel-bank.vercel.app` (Cloudtype **runtime `options.env`**, not `buildenv`). Cloudtype에서 발급되는 서비스 URL은 GitHub에 입력하지 않습니다. 프론트엔드 Vercel의 `VITE_FINANCE_API_BASE`에 해당 URL을 별도 등록해야 합니다.
+
+공식 문서: https://docs.cloudtype.dev/ko/developers/githubactions
