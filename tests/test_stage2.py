@@ -100,3 +100,28 @@ def test_candidate_remains_simulated():
     assert any(e["transaction_status"]=="simulated"
         for d in simulation.json()["daily_cashflow"] for e in d["events"])
     assert client.get("/api/v4/users/S01/cashflow").json()["future_balances"] == baseline["future_balances"]
+
+
+def test_sms_rejects_ai_mode_and_never_uses_llm():
+    payload = {"user_id": "S01", "text": "알 수 없는 거래 12,000원 2026/11/05 09:00",
+               "use_llm_for_unknown": True}
+    rejected = client.post("/api/v4/sms/analyze", json=payload)
+    assert rejected.status_code == 422
+    payload["use_llm_for_unknown"] = False
+    parsed = client.post("/api/v4/sms/analyze", json=payload)
+    assert parsed.status_code == 200, parsed.text
+    assert parsed.json()["llm_called"] is False
+    assert parsed.json()["transactions"][0]["kind"] == "unclassified"
+
+
+def test_real_dataset_snapshot_is_observed_only_and_isolated():
+    ds = load_dataset()
+    r = client.get("/api/v4/users/S01/dataset-snapshot")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["dataset_id"] == ds.meta["dataset_id"]
+    assert data["snapshot_date"] == ds.meta["snapshot_date"]
+    assert data["accounts"] and data["transactions"] and data["daily"]
+    assert all(t["user_id"] == "S01" for t in data["transactions"])
+    assert all(d["date"] <= data["snapshot_date"] for d in data["daily"])
+    assert client.get("/api/v4/users/S99/dataset-snapshot").status_code == 404
