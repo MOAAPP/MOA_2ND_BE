@@ -28,11 +28,14 @@ PARSE_PARAMETERS: dict = {
         "target_product_id": {"type": ["string", "null"]},
         "preferred_purchase_date": {"type": ["string", "null"], "description": "Exact ISO date only. No guesses."},
         "latest_purchase_date": {"type": ["string", "null"]},
+        "credit_debit_date": {"type": ["string", "null"], "description": "Use ONLY explicitly stated exact credit-card settlement dates."},
         "minimum_balance": {"type": ["integer", "null"]},
         "required_savings_amount": {"type": ["integer", "null"]},
         "savings_goal_id": {"type": ["string", "null"]},
         "investment_allowed": {"type": "boolean"},
         "maximum_investment_amount": {"type": "integer"},
+        "adjustable_expense_categories": {"type": "array", "items": {"type": "string"}},
+        "maximum_spending_reduction": {"type": "integer"},
         "allowed_payment_methods": {"type": "array", "items": {"type": "string", "enum": ["debit", "transfer", "credit"]}},
         "hard_constraints": {"type": "array", "items": {"type": "string"}},
         "soft_preferences": {"type": "array", "items": {"type": "string"}},
@@ -150,17 +153,24 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
     # Identity/date are ALWAYS server-controlled, never the model's choice.
     allowed = set(PARSE_PARAMETERS["properties"])
     extracted = {k: v for k, v in extracted.items() if k in allowed and v is not None}
-    for key in ("purchase_amount", "minimum_balance", "required_savings_amount", "maximum_investment_amount"):
+    for key in ("purchase_amount", "minimum_balance", "required_savings_amount", "maximum_investment_amount", "maximum_spending_reduction"):
         amount = extracted.get(key)
         if amount and not _numbers_in_text(goal_text, amount):
             extracted.pop(key)
-            if key == "maximum_investment_amount":
-                extracted["maximum_investment_amount"] = 0
+            if key in ("maximum_investment_amount", "maximum_spending_reduction"):
+                extracted[key] = 0
             extracted.setdefault("confirmations_required", []).append(
                 f"{key}: 사용자가 제시한 금액인지 확인해 주세요.")
     # No LLM-constructed card settlement timing; explicit user confirmation required.
-    if "credit" in extracted.get("allowed_payment_methods", []):
+    if "credit" in extracted.get("allowed_payment_methods", []) and not extracted.get("credit_debit_date"):
         extracted.setdefault("confirmations_required", []).append("신용카드 결제계좌 출금일 확인 필요")
+    # Independent safeguard: a promise to maintain existing savings is not
+    # satisfied by a fictional goal amount or by silently omitting the constraint.
+    if any(word in goal_text for word in ("저축", "적금")) and any(
+        word in goal_text for word in ("유지", "반드시", "꼭", "지켜")
+    ) and extracted.get("required_savings_amount") is None:
+        extracted.setdefault("confirmations_required", []).append(
+            "유지해야 할 저축 납입액을 숫자로 확인해 주세요.")
     conditions = GoalConditions(user_id=user_id, as_of=as_of, **extracted)
     return conditions, _usage(response)
 
