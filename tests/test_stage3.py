@@ -147,10 +147,10 @@ def test_ml_interface_no_oracle_future_labels():
 
 
 def test_virtual_etf_sale_settlement_realized_gain_and_remaining_holdings():
-    original = get_result(investment_amount=50000)
+    original = get_result(investment_amount=100000)
     price = original["reference_investment_price"]
     assert price is not None
-    sell = get_result(investment_amount=50000, virtual_sell_qty=1,
+    sell = get_result(investment_amount=100000, virtual_sell_qty=1,
                       virtual_sell_unit_price=price+1000,
                       virtual_sell_date="2026-11-07")
     baseline = paths(sell)["no_purchase"]
