@@ -88,16 +88,7 @@ def effective_rows(ds: Dataset, user_id: str) -> list[dict]:
              description="모든 금융 결제 문자는 규칙 기반 파서만 사용합니다. 외부 AI에 문자를 보내지 않으며 원문은 저장하지 않습니다. 비정형 문자도 수동 확인만 허용합니다.")
 async def sms_analyze(request: SmsAnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
     ensure_user(ds, request.user_id)
-    try:
-        result = await analyze_sms(request.user_id, request.text, datetime.now(KST).date())
-    except RuntimeError as exc:
-        fail("sms_llm_unavailable", str(exc), 503)
-    except Exception as exc:
-        # Do not return raw upstream response or sensitive message data.
-        if isinstance(exc, HTTPException):
-            raise
-        fail("sms_llm_failed", "비정형 문자 AI 파싱에 실패했습니다. 직접 정보를 확인해주세요.", 502)
-    return result
+    return await analyze_sms(request.user_id, request.text, datetime.now(KST).date())
 
 
 @router.post("/sms/confirm", summary="사용자 승인 후 별도 파일에 거래 등록",
