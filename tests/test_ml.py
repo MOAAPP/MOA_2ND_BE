@@ -123,3 +123,15 @@ def test_all_twenty_home_users_and_date_change():
     assert all(t["date"]<="2026-11-03" for t in r.json()["recent_transactions"])
     assert client.get("/api/v4/users/S99/forecast").status_code==404
     assert client.get("/api/v4/users/S01/home?as_of=2026-11-05").status_code==422
+
+
+def test_data_quality_report_twenty_personas():
+    from app.ml.audit import audit_dataset
+    report=audit_dataset()
+    assert report['user_count']==20
+    assert report['user_ids']==[f'S{i:02}' for i in range(1,21)]
+    assert report['transaction_rows_total']==12777
+    assert not report['duplicate_transaction_ids']
+    assert len(report['per_user'])==20
+    assert all(u['observed_day_rows']<=55 for u in report['per_user'].values())
+    assert all(u['confirmed_zero_variable_account_outflow_days']>=0 for u in report['per_user'].values())

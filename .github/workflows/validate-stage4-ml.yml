@@ -18,6 +18,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run all backend tests, including real LightGBM fit and reloading
         run: pytest -q
+      - name: Audit original synthetic dataset without repairing or inventing missing data
+        run: python -m app.ml.audit --output /tmp/stage4-data-audit.json
       - name: Train and evaluate actual canonical synthetic dataset
         run: python -m app.ml.train --output /tmp/parallel-stage4-model > /tmp/parallel-stage4-training.json
       - name: Verify model selection and 20 user report
@@ -40,4 +42,5 @@ jobs:
           path: |
             /tmp/parallel-stage4-model/evaluation.json
             /tmp/parallel-stage4-model/metadata.json
+            /tmp/stage4-data-audit.json
           if-no-files-found: warn
