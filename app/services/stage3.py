@@ -178,6 +178,25 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
                                      qty=qty, unit_price=unit_price, price_source=invest_origin))
             else:
                 notes.append("investment_budget_below_one_share_price_cash_retained")
+        if sid == "virtual_investment" and req.virtual_sell_qty:
+            if req.virtual_sell_unit_price is None:
+                needs_confirmation = True
+                notes.append("virtual_sell_unit_price_requires_confirmation")
+            else:
+                sell_day = req.virtual_sell_date or proposed_day + timedelta(days=1)
+                settle_day = req.virtual_sell_settlement_date or sell_day
+                if sell_day < proposed_day or settle_day < sell_day:
+                    raise FinanceProblem("virtual_sell_date_or_settlement_before_buy")
+                if req.virtual_sell_settlement_date is None:
+                    notes.append("virtual_sell_same_day_settlement_is_explicit_sandbox_assumption")
+                events.append(_event(
+                    sid, u.user_id, "virtual_investment_sell", sell_day,
+                    req.virtual_sell_qty * req.virtual_sell_unit_price,
+                    account, "transfer", debit_day=settle_day,
+                    name="가상 주식·ETF 매도 정산", code=instrument or "CUSTOM",
+                    qty=req.virtual_sell_qty, unit_price=req.virtual_sell_unit_price,
+                    price_source="user_assumption",
+                ))
         # Explicit events apply only to their matching path, never to another user's data.
         events.extend(e.model_copy(update={"account_id": account}) for e in req.custom_events
                       if e.scenario_id == sid and e.user_id == u.user_id)
@@ -227,6 +246,7 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
         held_qty = 0
         cost = 0
         invested_value = 0
+        realized_gain = 0
         goal_date = None
         for item in result.daily_cashflow:
             current_day = item.date
@@ -247,9 +267,13 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
                     q = int(ev.metadata.get("qty", 0))
                     if q <= 0 or q > held_qty:
                         raise FinanceProblem("investment_sell_exceeds_funded_holdings")
-                    remaining_cost = cost - round(cost * q / held_qty)
+                    sell_price = int(ev.metadata.get("unit_price", 0))
+                    if sell_price <= 0 or q * sell_price != ev.amount:
+                        raise FinanceProblem("investment_sell_value_mismatch")
+                    released_cost = round(cost * q / held_qty)
+                    realized_gain += ev.amount - released_cost
+                    cost -= released_cost
                     held_qty -= q
-                    cost = remaining_cost
                 elif ev.event_type == "virtual_asset_revaluation":
                     valuation_override = int(ev.metadata.get("unit_price", unit_price or 0))
             price_today = valuation_override or unit_price or 0
@@ -266,7 +290,7 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
                 date=current_day, opening_balance=item.opening_balance, inflow=item.inflow,
                 outflow=item.outflow, closing_balance=item.closing_balance,
                 lowest_balance=item.lowest_balance, savings_balance=cash_savings,
-                investment_value=invested_value, investment_profit_loss=invested_value-cost))
+                investment_value=invested_value, investment_profit_loss=invested_value-cost+realized_gain))
         if req.savings_goal_target is not None and req.savings_goal_current >= req.savings_goal_target:
             goal_date = day
         balances = {key: value for key, value in result.future_balances.items()}
@@ -286,7 +310,8 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
             first_shortfall_date=short, minimum_balance_met=minimum >= req.minimum_required_balance,
             essential_payments_covered=result.essential_payments_covered is True,
             virtual_savings=cash_savings, virtual_investment_value=invested_value,
-            virtual_investment_profit_loss=invested_value-cost,
+            virtual_investment_profit_loss=invested_value-cost+realized_gain,
+            virtual_investment_realized_profit_loss=realized_gain,
             investment_quantity=held_qty,
             investment_average_price=round(cost/held_qty, 2) if held_qty else None,
             savings_goal_reached_date=goal_date,
