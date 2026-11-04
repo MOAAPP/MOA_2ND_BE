@@ -1,0 +1,43 @@
+name: Stage 4 real-LightGBM and financial integration
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ml-and-fastapi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python and LightGBM
+        run: pip install -r requirements.txt
+      - name: Run all backend tests, including real LightGBM fit and reloading
+        run: pytest -q
+      - name: Train and evaluate actual canonical synthetic dataset
+        run: python -m app.ml.train --output /tmp/parallel-stage4-model > /tmp/parallel-stage4-training.json
+      - name: Verify model selection and 20 user report
+        run: |
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/parallel-stage4-model/evaluation.json'))
+          assert len(d['test_users'])==20
+          assert d['metadata']['selected_model'] in ('lightgbm','weekday','recent7')
+          assert d['test']['lightgbm']['7']['cases']>0
+          print('selected:',d['metadata']['selected_model'])
+          print('validation 7-day:',{k:v['7']['mae'] for k,v in d['validation'].items()})
+          print('test 7-day:',{k:v['7']['mae'] for k,v in d['test'].items()})
+          PY
+      - name: Upload inspectable synthetic holdout metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-synthetic-ml-evaluation
+          path: |
+            /tmp/parallel-stage4-model/evaluation.json
+            /tmp/parallel-stage4-model/metadata.json
+          if-no-files-found: warn
