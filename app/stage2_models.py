@@ -35,7 +35,7 @@ class ParsedTransaction(BaseModel):
 class SmsAnalyzeRequest(BaseModel):
     user_id: str = Field(pattern=r"^S\d\d$", examples=["S01"])
     text: str = Field(min_length=4, max_length=12000, description="Pasted SMS, not stored as plaintext")
-    use_llm_for_unknown: bool = False
+    use_llm_for_unknown: Literal[False] = Field(default=False, description="Legacy field; true is rejected. Financial SMS never calls AI.")
 
 
 class SmsAnalysis(BaseModel):
