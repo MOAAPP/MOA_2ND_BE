@@ -213,3 +213,21 @@ def test_unknown_free_text_hard_rule_never_silently_passes():
     assert result.status == "needs_confirmation"
     assert result.routes == []
     assert any("특별 대출" in item for item in result.confirmations_required)
+
+
+def test_explicit_investment_loss_changes_only_hypothetical_asset_value():
+    from app.services.stage3 import compare_worlds
+    from app.stage3_models import WorldCompareRequest
+    ds = load_dataset()
+    base = WorldCompareRequest(user_id="S01", as_of=DAY, purchase_amount=100000,
+                               investment_amount=100000)
+    original = compare_worlds(ds, base)
+    stressed = compare_worlds(ds, base.model_copy(update={
+        "stress": "investment_loss", "investment_return_percent": -25,
+    }))
+    first = next(x for x in original.paths if x.scenario_id == "virtual_investment")
+    second = next(x for x in stressed.paths if x.scenario_id == "virtual_investment")
+    assert first.investment_quantity > 0
+    assert second.virtual_investment_value < first.virtual_investment_value
+    assert second.virtual_investment_profit_loss < first.virtual_investment_profit_loss
+    assert second.available_cash == first.available_cash
