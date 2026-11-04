@@ -54,7 +54,7 @@ def normalise_observed(txns: tuple[dict, ...], as_of: datetime) -> tuple[list[di
         occurred = row.get('occurred_at')
         if not isinstance(occurred, (int, float)) or kst(occurred) > as_of:
             continue
-        if row.get('status') != 'confirmed_synthetic':
+        if row.get('status') not in ('confirmed_synthetic', 'confirmed_user'):
             continue
         observed.append(row)
     return observed, excluded
@@ -124,7 +124,7 @@ def recorded_events(u: UserData, account: str, observed: list[dict], anchor: dat
             continue
         events.append(_event(u, account, 'txn:' + t['id'], due, effect, t.get('name', t.get('kind', '거래')),
                              t.get('kind', 'unknown'), t.get('method', 'transfer'), 'actual',
-                             'dataset_observed_transaction', kst(t['occurred_at']), bool(t.get('essential')), [t['id']]))
+                             'user_confirmed_sms' if t.get('status') == 'confirmed_user' else 'dataset_observed_transaction', kst(t['occurred_at']), bool(t.get('essential')), [t['id']]))
     return events
 
 
@@ -185,8 +185,6 @@ def scheduled_events(u: UserData, account: str, observed: list[dict], anchor: da
         uncertain = direction == 'in' and schedule.get('status') == 'uncertain'
         if uncertain and not include_uncertain:
             continue
-        if schedule.get('kind') in ('credit_card_bill', 'card_payment') and start in billed_dates:
-            continue
         occurrences = []
         if schedule.get('recurrence') == 'once' and schedule.get('date'):
             occurrences = [date.fromisoformat(schedule['date'])]
@@ -197,6 +195,8 @@ def scheduled_events(u: UserData, account: str, observed: list[dict], anchor: da
                 y, zero = divmod(j, 12)
                 occurrences.append(month_date(y, zero + 1, int(schedule['day'])))
         for scheduled_day in occurrences:
+            if schedule.get('kind') in ('credit_card_bill', 'card_payment') and scheduled_day in billed_dates:
+                continue
             if (schedule['id'], scheduled_day) in paid_schedule_refs:
                 continue
             debit_day = scheduled_day + timedelta(days=income_delay_days if direction == 'in' else 0)
@@ -258,7 +258,7 @@ def _virtual(u: UserData, as_of: datetime) -> dict:
             'status': 'simulated_only'}
 
 
-def _parse_as_of(as_of: date | datetime | None, ds: Dataset) -> datetime:
+def _parse_as_of(as_of: date | datetime | None, ds: Dataset, allow_post_snapshot: bool = False) -> datetime:
     cutoff = date.fromisoformat(ds.meta['snapshot_date'])
     if as_of is None:
         return eod(cutoff)
@@ -268,23 +268,28 @@ def _parse_as_of(as_of: date | datetime | None, ds: Dataset) -> datetime:
         parsed = as_of.astimezone(KST)
     else:
         parsed = eod(as_of)
-    if parsed > eod(cutoff):
+    if parsed > eod(cutoff) and not allow_post_snapshot:
         raise FinanceProblem(f'as_of_exceeds_observation_cutoff:{cutoff}')
+    if parsed > eod(datetime.now(KST).date()):
+        raise FinanceProblem('as_of_cannot_be_in_future')
     return parsed
 
 
-def _selected(ds: Dataset, req: CalculationRequest) -> tuple[UserData, str, datetime]:
+def _selected(ds: Dataset, req: CalculationRequest, allow_post_snapshot: bool = False) -> tuple[UserData, str, datetime]:
     u = ds.get_user(req.user_id)
     account = req.account_id or u.profile.get('payment_account_id')
     if account not in {a['account_id'] for a in u.accounts}:
         raise FinanceProblem('account_does_not_belong_to_user')
-    return u, account, _parse_as_of(req.as_of, ds)
+    return u, account, _parse_as_of(req.as_of, ds, allow_post_snapshot=allow_post_snapshot)
 
 
-def calculate(ds: Dataset, req: CalculationRequest) -> FinancialResult:
-    u, account, as_of = _selected(ds, req)
+def calculate(ds: Dataset, req: CalculationRequest, observed_overlay: list[dict] | None = None,
+              allow_post_snapshot: bool = False) -> FinancialResult:
+    u, account, as_of = _selected(ds, req, allow_post_snapshot=allow_post_snapshot)
     anchor, balance, source, warnings = anchor_for(u, account, as_of)
-    observed, excluded = normalise_observed(u.transactions, as_of)
+    observed, excluded = normalise_observed(u.transactions + tuple(observed_overlay or []), as_of)
+    if observed_overlay:
+        warnings.append('confirmed_sms_overlay_applied_after_dataset_snapshot_only')
     warnings.extend(['dataset_is_synthetic_not_real_bank_data', 'future_scenario_transactions_excluded'])
     warnings.append('no_ml_predictions_provided' if not req.forecast_events else 'caller_provided_ml_forecast_unverified')
     if req.minimum_required_balance is None:
@@ -355,8 +360,9 @@ def calculate(ds: Dataset, req: CalculationRequest) -> FinancialResult:
                            forecast_applied=bool(req.forecast_events))
 
 
-def state_for(ds: Dataset, req: CalculationRequest) -> UserState:
-    r = calculate(ds, req)
+def state_for(ds: Dataset, req: CalculationRequest, observed_overlay: list[dict] | None = None,
+              allow_post_snapshot: bool = False) -> UserState:
+    r = calculate(ds, req, observed_overlay=observed_overlay, allow_post_snapshot=allow_post_snapshot)
     u = ds.get_user(req.user_id)
     as_of_day = r.as_of.date()
     incomes = [s for s in u.schedules if s.get('direction') == 'in' and s.get('account_id') == r.account_id]
