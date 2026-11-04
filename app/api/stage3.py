@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api.finance import dataset_dep
-from app.core.settings import BACKEND_DIR
+from app.core.settings import BACKEND_DIR, DEFAULT_DEMO_USER_ID
 from app.schemas import CalculationRequest
 from app.services.dataset import Dataset
 from app.services.finance import FinanceProblem, calculate, state_for, kst
@@ -18,7 +18,7 @@ from app.ml.forecast import run_forecast, to_events, ForecastProblem
 from app.stage3_models import WorldCompareRequest, WorldCompareResult
 
 router = APIRouter(prefix="/api/v4", tags=["v4-stage3-digital-twin"])
-DEMO_USER_ID = os.environ.get("MOA_DEFAULT_DEMO_USER", "S01")
+DEMO_USER_ID = DEFAULT_DEMO_USER_ID
 STORAGE_DIR = Path(os.environ.get("MOA_STAGE3_STORAGE_DIR", str(BACKEND_DIR / "app/data/runtime/scenarios"))).resolve()
 
 

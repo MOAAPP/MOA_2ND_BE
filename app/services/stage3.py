@@ -150,7 +150,7 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
             pct = req.daily_spend_increase_percent
             stress_data = dict(forecast_data)
             stress_data["upper_scenario"] = {
-                "daily": [{"date": row["date"], "amount": round(row["amount"] * (1 + pct / 100))}
+                "daily": [{"date": row["date"], "amount": round(row["amount"] * (1 + pct / 100)), "method": row["method"]}
                           for row in forecast_data["daily"]],
                 "kind": "assumption_not_calibrated", "increase_percent": pct,
             }

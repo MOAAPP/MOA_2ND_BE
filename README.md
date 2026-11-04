@@ -6,7 +6,33 @@
 - 백엔드 (FastAPI, Pydantic, pytest): 이 저장소
 - 데이터베이스 없음. 20명 합성 금융 데이터 ZIP을 **원본 변경 없이 읽기 전용**으로 사용합니다.
 - 신용카드 승인·청구, 잔액 스냅샷, 계좌 이체, 날짜별 출금, 필수결제 및 3/7/14일 잔액 시뮬레이션
-- ML·LLM의 미래 예측 결과를 만들어내지 않습니다. 2단계에서 별도의 예측/시뮬레이션 이벤트를 주입할 수 있습니다.
+- 4단계 LightGBM 오프라인 실제 학습·요일별/최근7일 기준선 비교·FastAPI 추론을 지원하며, 미래 확정 결제와 변동 출금을 분리합니다.
+
+## 4단계 LightGBM 실제 학습 및 메인 데이터 연결
+
+현재 `feat/v4-stage4-lightgbm-cashflow` 브랜치를 체크아웃하세요. 반드시 **학습**과 **서버 시작**을 순서대로 실행하세요.
+
+```bash
+python -m pip install -r requirements.txt
+python -m app.ml.audit
+python -m app.ml.train
+pytest -q
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+
+기본 사용자 `S01`, 관측 기준일 `2026-11-04`, 20명 전환이 가능합니다. React는 별도 터미널에서 `npm ci && npm run dev:web`를 사용합니다.
+
+- 실제 원본 데이터 사용 확인: http://127.0.0.1:8000/api/v4/health
+- 기본 시연 사용자: http://127.0.0.1:8000/api/v4/demo/default
+- 홈 화면 실제 금융 데이터: http://127.0.0.1:8000/api/v4/users/S01/home?as_of=2026-11-04
+- 변동 지출 예측: http://127.0.0.1:8000/api/v4/users/S01/forecast?as_of=2026-11-04
+- 모델 반영 현금흐름: http://127.0.0.1:8000/api/v4/users/S01/forecast-cashflow?as_of=2026-11-04&scenario=base
+- Swagger: http://127.0.0.1:8000/docs
+
+학습 산출물 `app/data/models/` 아래의 LightGBM 모델 TXT, metadata, evaluation JSON 및 원본 데이터 감사 JSON은 Git 추적에서 제외됩니다. GitHub Actions에서는 학습·평가 보고서를 워크플로 아티팩트로 보관합니다. 모델 파일이 없거나 LightGBM이 선정되지 않았다면 API는 기준선과 `model_type`을 구분하여 반환합니다.
+
+**관측된 55일 이외의 미래 37일 시나리오 데이터는 학습 및 테스트의 정답이 아닙니다.** 지출 증가 25%는 경험적 가정이며 검증된 확률이나 예측구간이 아닙니다. 합성 데이터 점수로 실사용자 정확도를 주장하지 않습니다.
 
 ## 로컬 실행 (macOS)
 

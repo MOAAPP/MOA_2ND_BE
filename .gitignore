@@ -8,3 +8,5 @@ app/data/runtime/
 app/data/source/*
 !app/data/source/.gitkeep
 !app/data/source/moa_20users_financial_test_JSON.zip
+# Generated local training artifacts. Keep the versioned source ZIP separate.
+app/data/models/

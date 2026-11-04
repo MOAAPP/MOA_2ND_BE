@@ -193,6 +193,8 @@ def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None):
     ledger=observed_ledger(u,as_of)
     quality=_quality(ledger,as_of)
     meta,model=artifact if artifact is not None else load_artifact()
+    if meta and meta.get("dataset_id") != ds.meta["dataset_id"]:
+        raise ForecastProblem("artifact_dataset_id_mismatch")
     selected=(meta or {}).get("selected_model","weekday")
     if selected not in ("lightgbm","recent7","weekday"):
         raise ForecastProblem("model_selection_unknown")
@@ -231,7 +233,7 @@ def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None):
         "forecasts":[{"horizon_days":n,"predicted_variable_outflow":sum(x["amount"] for x in daily[:n])}
                      for n in (3,7,14) if n<=horizon],
         "upper_scenario":{"kind":"assumption_not_calibrated","increase_percent":25,
-                          "daily":[{"date":x["date"],"amount":round(x["amount"]*1.25)} for x in daily]},
+                          "daily":[{"date":x["date"],"amount":round(x["amount"]*1.25),"method":x["method"]} for x in daily]},
         "is_synthetic":True,"candidate_purchases_included":False,
     }
 
