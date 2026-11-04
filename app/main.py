@@ -7,11 +7,12 @@ from app.api.finance import router
 from app.api.stage2 import router as sms_router, purchase_router
 from app.api.stage3 import router as stage3_router
 from app.api.ml import router as ml_router
+from app.api.agent import router as agent_router
 from app.core.settings import CORS_ORIGINS
 
 app = FastAPI(
     title="평행통장 V4 · 금융 계산 API",
-    version="4.0.0-stage4",
+    version="4.0.0-stage5",
     summary="합성 금융 데이터를 이용한 결제계좌 현금흐름 계산·시뮬레이션",
     description=(
         "## 시작하기\n"
@@ -49,6 +50,7 @@ app.include_router(sms_router)
 app.include_router(purchase_router)
 app.include_router(stage3_router)
 app.include_router(ml_router)
+app.include_router(agent_router)
 
 
 @app.get("/", include_in_schema=False)
