@@ -73,6 +73,10 @@ class WorldCompareRequest(BaseModel):
     investment_code: str | None = None
     investment_unit_price: int | None = Field(default=None, gt=0)
     investment_return_percent: float = Field(default=0, ge=-100, le=1000)
+    virtual_sell_qty: int = Field(default=0, ge=0)
+    virtual_sell_unit_price: int | None = Field(default=None, gt=0)
+    virtual_sell_date: date | None = None
+    virtual_sell_settlement_date: date | None = None
     allocation: Allocation | None = None
     minimum_required_balance: int = Field(default=0, ge=0)
     stress: StressKind = "baseline"
@@ -115,6 +119,7 @@ class ScenarioPath(BaseModel):
     virtual_savings: int
     virtual_investment_value: int
     virtual_investment_profit_loss: int
+    virtual_investment_realized_profit_loss: int = 0
     investment_quantity: int
     investment_average_price: float | None
     savings_goal_reached_date: date | None
