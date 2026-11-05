@@ -50,5 +50,25 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
     except AiUnavailable:
         raise
     except Exception as exc:
-        # Do not leak provider credentials, request bodies or internal URLs.
-        raise AiUnavailable("provider_call_or_schema_failed") from exc
+        # Upstream SDK exceptions may include raw request text and URLs.
+        # Report only the HTTP class or safe exception TYPE, never messages,
+        # headers, endpoint URLs, request bodies or credentials.
+        status = getattr(exc, "status_code", None)
+        if status in (401, 403):
+            code = "provider_auth_or_permission_failed"
+        elif status == 404:
+            code = "provider_model_or_endpoint_not_found"
+        elif status == 429:
+            code = "provider_rate_or_quota_limited"
+        elif status in (400, 422):
+            code = "provider_request_or_schema_incompatible"
+        elif isinstance(status, int) and status >= 500:
+            code = "provider_upstream_unavailable"
+        elif isinstance(exc, (ValueError, TypeError, KeyError, IndexError)):
+            code = "provider_response_invalid_json"
+        elif type(exc).__name__ in ("APITimeoutError", "APIConnectionError",
+                                    "ConnectTimeout", "ReadTimeout", "ConnectError"):
+            code = "provider_network_or_timeout"
+        else:
+            code = "provider_call_failed"
+        raise AiUnavailable(code) from exc
