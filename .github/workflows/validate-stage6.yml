@@ -1,0 +1,38 @@
+name: Stage 6 - 20-user finance API and saved plan integration
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - '.github/workflows/validate-stage6.yml'
+      - 'requirements.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  stage6:
+    name: Verify immutable dataset and 20-user stage-6 APIs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Verify original source archive integrity
+        run: echo "9e2adc5a7aa7720ef8daf24f8766389233dee399c0ea0826f9dc3a90aaeab609  app/data/source/moa_20users_financial_test_JSON.zip" | sha256sum --check -
+      - name: Compile Python and check 20-user integration tests
+        run: |
+          python -m compileall -q app
+          python -m pytest -q tests/test_stage7.py tests/test_stage6.py tests/test_stage3.py tests/test_ml.py tests/test_agent.py tests/test_finance.py
+      - name: Document Swagger route registration
+        run: |
+          python - <<'PY'
+          from app.main import app
+          paths = app.openapi()['paths']
+          for suffix in ('/api/v4/demo/default', '/api/v4/users/{user_id}/home', '/api/v4/users/{user_id}/briefing', '/api/v4/users/{user_id}/spending-capacity', '/api/v4/users/{user_id}/plans/{plan_id}/tracking'):
+              assert suffix in paths, suffix
+          print('OpenAPI endpoints verified')
+          PY
