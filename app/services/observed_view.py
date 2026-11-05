@@ -48,6 +48,12 @@ def for_user_date(ds: Dataset, user_id: str, as_of: date | None) -> Dataset:
         extra.append(entry)
         already.add(entry["id"])
 
+    # A future date is not an observed day simply because the clock moved.
+    # Maintain the old 422 contract until the user actually confirms at least
+    # one post-snapshot transaction for this persona.
+    if not extra:
+        raise ValueError("post_snapshot_no_confirmed_transactions")
+
     view = object.__new__(Dataset)
     view.raw = ds.raw
     view.meta = {**ds.meta, "snapshot_date": day.isoformat(),
