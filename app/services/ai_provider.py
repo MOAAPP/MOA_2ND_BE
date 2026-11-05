@@ -36,7 +36,7 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         params = {
             "model": selected_model,
             "messages": [
-                {"role": "system", "content": system + "\\n반드시 설명이나 코드블록 없이 JSON 객체만 응답하라."},
+                {"role": "system", "content": system + "\n반드시 설명이나 코드블록 없이 JSON 객체만 응답하라."},
                 {"role": "user", "content": json.dumps(facts, ensure_ascii=False)},
             ],
             "temperature": 0,
