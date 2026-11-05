@@ -187,7 +187,7 @@ def save_scenario(payload: ScenarioSaveRequest, ds: Dataset = Depends(dataset_de
         # Freeze the original computed paths; later observations never rewrite this result.
         "result_snapshot": result.model_dump(mode="json"),
         "forecast_snapshot": run_forecast(ds, payload.request.user_id,
-                                           payload.request.as_of, payload.request.horizon_days),
+                                           result.as_of, payload.request.horizon_days),
     }
     tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(target)
