@@ -20,13 +20,13 @@ jobs:
           python - <<'PY'
           import json, urllib.request
           root = "https://moa-finance-api.vercel.app"
-          for test in ("/", "/docs", "/api/index.py", "/app/main.py", "/api/v4/health"):
-              try:
-                  with urllib.request.urlopen(root+test, timeout=12) as res:
-                      print("PROBE",test,res.status,res.read(180),flush=True)
-              except Exception as e:
-                  print("PROBE",test,str(e),flush=True)
-          for suffix in ("/api/v4/health", "/api/v4/users/S01/briefing?as_of=2026-11-04"):
+          for suffix in (
+              "/api/v4/health",
+              "/api/v4/ai/status",
+              "/api/v4/users/S01/home?as_of=2026-11-04",
+              "/api/v4/users/S01/forecast?as_of=2026-11-04",
+              "/api/v4/users/S01/briefing?as_of=2026-11-04",
+          ):
               req = urllib.request.Request(root + suffix, headers={"Accept":"application/json","User-Agent":"MOA-API-Healthcheck"})
               with urllib.request.urlopen(req, timeout=35) as res:
                   data = json.load(res)
@@ -34,6 +34,14 @@ jobs:
                   assert res.status == 200
                   if suffix.endswith("/health"):
                       assert data["users"] == 20 and data["synthetic"] is True
+                  elif suffix.endswith("/ai/status"):
+                      assert data["keys_exposed"] is False
+                      assert data["llm_configured"] is False
+                  elif suffix.endswith("/home?as_of=2026-11-04"):
+                      assert data["user_id"] == "S01" and data["available_cash"] == 27800
+                  elif suffix.endswith("/forecast?as_of=2026-11-04"):
+                      assert data["user_id"] == "S01"
+                      assert len(data["daily"]) == 14
                   else:
                       assert data["user_id"] == "S01"
                       assert data["spending_capacity"]["current_cash"] == 27800
