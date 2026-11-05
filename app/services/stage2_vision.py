@@ -84,15 +84,17 @@ def checkout_total(fields: VisionFields, *, conditional: bool = False) -> int | 
 
 async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAnalysis:
     normalized, mime = prepare_image(raw, content_type)
-    model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
+    model = (os.getenv("MOA_VISION_MODEL") or os.getenv("OPENAI_VISION_MODEL")
+             or os.getenv("MOA_AI_MODEL") or "gpt-4o-mini")
     digest = hashlib.sha256(normalized).hexdigest()
     for entry in read_user(user_id)["analyses"]:
         if entry.get("image_digest") == digest and entry.get("model") == model:
             cached = VisionAnalysis.model_validate(entry["response"])
             return cached.model_copy(update={"cached": True})
-    key = os.getenv("OPENAI_API_KEY", "")
+    key = (os.getenv("MOA_VISION_API_KEY") or os.getenv("MOA_AI_API_KEY")
+           or os.getenv("OPENAI_API_KEY", ""))
     if not key:
-        raise VisionProblem("vision_api_key_missing", "백엔드에 OPENAI_API_KEY를 설정한 뒤 다시 시도해주세요.", 503)
+        raise VisionProblem("vision_api_key_missing", "백엔드 .env에 MOA_VISION_API_KEY 또는 MOA_AI_API_KEY를 설정해주세요.", 503)
     payload = {
         "model": model, "temperature": 0, "max_tokens": 1600,
         "response_format": {"type": "json_object"},
@@ -107,7 +109,10 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
     start = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=45) as client:
-            res = await client.post("https://api.openai.com/v1/chat/completions",
+            # Only the configured server-side provider receives screenshots.
+            base = (os.getenv("MOA_VISION_BASE_URL") or os.getenv("MOA_AI_BASE_URL")
+                    or "https://api.openai.com/v1").rstrip("/")
+            res = await client.post(base + "/chat/completions",
                 headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
                 json=payload)
         if res.status_code in (401, 403):
