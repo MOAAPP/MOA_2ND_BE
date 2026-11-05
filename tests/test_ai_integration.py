@@ -118,7 +118,7 @@ def test_post_snapshot_confirmed_transaction_is_consistent_across_home_forecast_
 
 def test_future_is_not_imported_as_observed():
     response = client.get("/api/v4/users/S01/home?as_of=2026-12-11")
-    assert response.status_code in (422, 500)  # guard must return 422 at API boundary
+    assert response.status_code == 422
     assert client.get("/api/v4/users/S01/dataset-snapshot?as_of=2026-11-05").status_code == 422
 
 def test_provider_vision_mocks_not_accuracy(monkeypatch):
