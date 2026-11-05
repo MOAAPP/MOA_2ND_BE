@@ -3,11 +3,21 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.finance import dataset_dep
 from app.services.dataset import Dataset
+from app.services.observed_view import for_user_date
 from app.services.finance import FinanceProblem
 from app.services.stage6 import briefing, spend_capacity, list_saved_plans, track_plan
 from app.services.ai_briefing import ai_briefing
 
 router = APIRouter(prefix="/api/v4", tags=["v4-stage6-personalized"])
+
+
+def _view(ds: Dataset, user_id: str, as_of: date | None):
+    try:
+        return for_user_date(ds, user_id, as_of)
+    except KeyError:
+        raise HTTPException(404, {"code": "user_not_found"})
+    except ValueError as exc:
+        raise HTTPException(422, {"code": "date_invalid", "message": str(exc)})
 
 
 def _handle(fn, *args, **kwargs):
@@ -27,6 +37,7 @@ def spending_capacity(user_id: str, as_of: date | None = None,
                       payment_method: str = Query("debit", pattern="^(debit|credit)$"),
                       credit_debit_date: date | None = None,
                       ds: Dataset = Depends(dataset_dep)):
+    ds = _view(ds, user_id, as_of)
     return _handle(spend_capacity, ds, user_id, as_of, horizon=horizon_days,
                    minimum_balance=minimum_required_balance, income_delay_days=income_delay_days,
                    payment_method=payment_method, credit_debit_date=credit_debit_date)
@@ -36,6 +47,7 @@ def spending_capacity(user_id: str, as_of: date | None = None,
 def morning_briefing(user_id: str, as_of: date | None = None,
                      minimum_required_balance: int = Query(0, ge=0),
                      ds: Dataset = Depends(dataset_dep)):
+    ds = _view(ds, user_id, as_of)
     return _handle(ai_briefing, ds, user_id, as_of, minimum_balance=minimum_required_balance)
 
 
@@ -43,6 +55,7 @@ def morning_briefing(user_id: str, as_of: date | None = None,
 def financial_changes(user_id: str, as_of: date | None = None,
                       minimum_required_balance: int = Query(0, ge=0),
                       ds: Dataset = Depends(dataset_dep)):
+    ds = _view(ds, user_id, as_of)
     data = _handle(briefing, ds, user_id, as_of, minimum_balance=minimum_required_balance)
     return {"user_id": user_id, "as_of_date": data["as_of_date"],
             **data["change_detection"]}
@@ -56,6 +69,7 @@ def saved_plans(user_id: str, ds: Dataset = Depends(dataset_dep)):
 @router.get("/users/{user_id}/plans/{plan_id}/tracking", summary="저장 분석 스냅샷과 이후 관측 지출 비교")
 def plan_tracking(user_id: str, plan_id: str, as_of: date | None = None,
                   ds: Dataset = Depends(dataset_dep)):
+    ds = _view(ds, user_id, as_of)
     return _handle(track_plan, ds, user_id, plan_id, as_of)
 
 
