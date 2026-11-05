@@ -7,5 +7,6 @@ import os
 
 os.environ.setdefault("MOA_RUNTIME_DIR", "/tmp/moa-finance/runtime")
 os.environ.setdefault("MOA_STAGE3_STORAGE_DIR", "/tmp/moa-finance/runtime/scenarios")
+os.environ.setdefault("MOA_STAGE6_STORAGE_DIR", "/tmp/moa-finance/runtime/stage6")
 
 from app.main import app  # noqa: E402
