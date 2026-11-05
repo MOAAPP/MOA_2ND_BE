@@ -23,6 +23,7 @@ def test_factchat_omits_unsupported_json_object(monkeypatch):
     assert result["explanation"] == "예정된 결제 일정을 확인해 보세요."
     assert model == "claude-haiku-4-5-20251001"
     assert "response_format" not in params
+    assert params["max_tokens"] >= 512
     assert params["temperature"] == 0
     assert sdk.call_args.kwargs["base_url"] == "https://factchat-cloud.mindlogic.ai/v1/gateway"
 
@@ -46,3 +47,25 @@ def test_factchat_non_json_never_claims_success(monkeypatch):
         with pytest.raises(AiUnavailable) as exc:
             structured_text("JSON only", {"source":"synthetic S01"})
     assert exc.value.code == "provider_response_invalid_json"
+
+
+def test_factchat_fenced_json_response_is_verified(monkeypatch):
+    monkeypatch.setenv("MOA_AI_API_KEY", "fake-key")
+    monkeypatch.setenv("MOA_AI_BASE_URL", "https://factchat-cloud.mindlogic.ai/v1/gateway")
+    with patch("openai.OpenAI") as sdk:
+        sdk.return_value.chat.completions.create.return_value = _response(
+            '```json\\n{"explanation":"다가오는 필수 결제를 먼저 확인해요."}\\n```')
+        result, _ = structured_text("Return JSON", {"uid": "S01"})
+    assert result["explanation"] == "다가오는 필수 결제를 먼저 확인해요."
+
+
+def test_factchat_truncated_json_cannot_claim_success(monkeypatch):
+    monkeypatch.setenv("MOA_AI_API_KEY", "fake-key")
+    monkeypatch.setenv("MOA_AI_BASE_URL", "https://factchat-cloud.mindlogic.ai/v1/gateway")
+    with patch("openai.OpenAI") as sdk:
+        response = _response('{"explanation":"unfinished')
+        response.choices[0].finish_reason = "length"
+        sdk.return_value.chat.completions.create.return_value = response
+        with pytest.raises(AiUnavailable) as error:
+            structured_text("Return JSON", {"uid": "S01"})
+    assert error.value.code == "provider_output_truncated"
