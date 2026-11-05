@@ -47,11 +47,29 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         # unsupported response_format with HTTP 400. We still strictly
         # validate the JSON object after the call; never fabricate an LLM
         # success for an invalid response.
-        if "factchat-cloud.mindlogic.ai/v1/gateway" not in base.rstrip("/").lower():
+        is_factchat = "factchat-cloud.mindlogic.ai/v1/gateway" in base.rstrip("/").lower()
+        if is_factchat:
+            # The gateway may route to a model with internal reasoning or
+            # verbose JSON formatting. A 160-token output allowance can
+            # truncate even a short valid JSON object mid-string.
+            params["max_tokens"] = max(512, max_tokens)
+        else:
             params["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**params)
-        raw = response.choices[0].message.content
-        result = json.loads(raw or "")
+        choice = response.choices[0]
+        raw = choice.message.content
+        if choice.finish_reason == "length":
+            raise AiUnavailable("provider_output_truncated")
+        if not isinstance(raw, str) or not raw.strip():
+            raise AiUnavailable("provider_empty_completion")
+        # Some OpenAI-compatible models return a fenced JSON object despite
+        # JSON-only instructions. Strip only surrounding Markdown fences.
+        text = raw.strip()
+        if text.startswith("```") and text.endswith("```"):
+            first_newline = text.find("\\n")
+            if first_newline != -1:
+                text = text[first_newline + 1:-3].strip()
+        result = json.loads(text)
         if not isinstance(result, dict):
             raise ValueError("response_not_an_object")
         return result, model or default_model
