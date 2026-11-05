@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.api.finance import dataset_dep
 from app.core.settings import BACKEND_DIR
 from app.services.dataset import Dataset
+from app.services.observed_view import for_user_date
 from app.services.agent_paths import GoalConditions, SearchRequest, SearchResult, search_paths
 from app.services.agent_llm import AgentFailure, run_agent
 from app.services.finance import FinanceProblem
@@ -40,6 +41,10 @@ class SaveRouteRequest(BaseModel):
 
 @router.post("/analyze", summary="LLM 조건 추출 → 실제 Python Tool Calling → 검증된 경로 탐색")
 def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
+    try:
+        ds = for_user_date(ds, payload.user_id, payload.as_of)
+    except ValueError as exc:
+        raise HTTPException(422, {"code":"date_invalid", "message":str(exc)}) from exc
     if payload.user_id not in ds.profiles:
         raise HTTPException(404, {"code": "user_not_found", "user_id": payload.user_id})
     try:
@@ -59,6 +64,7 @@ def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
 @router.post("/search", response_model=SearchResult, summary="LLM 없이 수정된 제약조건으로 Python 경로 재탐색")
 def search(payload: SearchRequest, ds: Dataset = Depends(dataset_dep)):
     try:
+        ds = for_user_date(ds, payload.conditions.user_id, payload.conditions.as_of)
         return search_paths(ds, payload)
     except KeyError as exc:
         raise HTTPException(404, {"code": "user_not_found"}) from exc
@@ -69,6 +75,8 @@ def search(payload: SearchRequest, ds: Dataset = Depends(dataset_dep)):
 @router.post("/routes/save", summary="검증된 에이전트 경로를 원본 데이터셋과 분리하여 저장")
 def save_route(payload: SaveRouteRequest, ds: Dataset = Depends(dataset_dep)):
     try:
+        ds = for_user_date(ds, payload.search_request.conditions.user_id,
+                           payload.search_request.conditions.as_of)
         result = search_paths(ds, payload.search_request)
     except (ValueError, KeyError, FinanceProblem) as exc:
         raise HTTPException(422, {"code": "route_revalidation_failed"}) from exc
