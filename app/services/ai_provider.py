@@ -58,7 +58,7 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         response = client.chat.completions.create(**params)
         choice = response.choices[0]
         raw = choice.message.content
-        if choice.finish_reason == "length":
+        if getattr(choice, "finish_reason", None) == "length":
             raise AiUnavailable("provider_output_truncated")
         if not isinstance(raw, str) or not raw.strip():
             raise AiUnavailable("provider_empty_completion")
@@ -66,7 +66,7 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         # JSON-only instructions. Strip only surrounding Markdown fences.
         text = raw.strip()
         if text.startswith("```") and text.endswith("```"):
-            first_newline = text.find("\\n")
+            first_newline = text.find("\n")
             if first_newline != -1:
                 text = text[first_newline + 1:-3].strip()
         result = json.loads(text)
