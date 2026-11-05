@@ -5,6 +5,7 @@ from app.api.finance import dataset_dep
 from app.services.dataset import Dataset
 from app.services.finance import FinanceProblem
 from app.services.stage6 import briefing, spend_capacity, list_saved_plans, track_plan
+from app.services.ai_briefing import ai_briefing
 
 router = APIRouter(prefix="/api/v4", tags=["v4-stage6-personalized"])
 
@@ -31,11 +32,11 @@ def spending_capacity(user_id: str, as_of: date | None = None,
                    payment_method=payment_method, credit_debit_date=credit_debit_date)
 
 
-@router.get("/users/{user_id}/briefing", summary="관측 변화 기반 개인화 모닝 브리핑, LLM 호출 없음")
+@router.get("/users/{user_id}/briefing", summary="Python 금융 사실 + 설정된 경우 실제 LLM 개인화 설명")
 def morning_briefing(user_id: str, as_of: date | None = None,
                      minimum_required_balance: int = Query(0, ge=0),
                      ds: Dataset = Depends(dataset_dep)):
-    return _handle(briefing, ds, user_id, as_of, minimum_balance=minimum_required_balance)
+    return _handle(ai_briefing, ds, user_id, as_of, minimum_balance=minimum_required_balance)
 
 
 @router.get("/users/{user_id}/changes", summary="지난 분석 대비 금융 변화 사건")
