@@ -95,15 +95,17 @@ class AgentFailure(Exception):
 
 
 def _client():
-    key = os.environ.get("MOA_AGENT_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    key = (os.environ.get("MOA_AGENT_API_KEY") or os.environ.get("MOA_AI_API_KEY")
+           or os.environ.get("OPENAI_API_KEY"))
     if not key:
         raise AgentFailure("ai_api_key_missing")
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise AgentFailure("openai_dependency_missing") from exc
-    return OpenAI(api_key=key, base_url=os.environ.get("MOA_AGENT_BASE_URL") or None,
-                  timeout=float(os.environ.get("MOA_AGENT_TIMEOUT_SECONDS", "12")),
+    return OpenAI(api_key=key, base_url=(os.environ.get("MOA_AGENT_BASE_URL")
+                 or os.environ.get("MOA_AI_BASE_URL") or None),
+                  timeout=float(os.environ.get("MOA_AGENT_TIMEOUT_SECONDS", "20")),
                   max_retries=0)
 
 
@@ -233,7 +235,7 @@ def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | N
     if uid not in ds.profiles:
         raise KeyError(uid)
     client = _client()
-    model = os.environ.get("MOA_AGENT_MODEL", "gpt-4.1-mini")
+    model = os.environ.get("MOA_AGENT_MODEL") or os.environ.get("MOA_AI_MODEL") or "gpt-4.1-mini"
     conditions, tokens = parse_conditions(client, model, goal, uid, as_of)
     if overrides:
         # User-edited structured controls supersede the model output.
