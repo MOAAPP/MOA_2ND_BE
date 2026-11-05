@@ -143,7 +143,7 @@ def test_provider_vision_mocks_not_accuracy(monkeypatch):
     image.save(buf, "PNG")
     with patch("app.services.stage2_vision.httpx.AsyncClient", return_value=MockClient()):
         result = client.post("/api/v4/vision/analyze",
-                             data={"user_id": "S01"},
+                             data={"user_id": "S01", "privacy_acknowledged": "true"},
                              files={"file": ("test.png", buf.getvalue(), "image/png")})
     assert result.status_code == 200, result.text
     assert result.json()["analysis_status"] == "succeeded"
