@@ -14,8 +14,8 @@ def test_briefing_sends_no_numeric_identifiers_amounts_or_dates(monkeypatch):
         seen["facts"] = facts
         return {"explanation": "예정된 지출을 고려해 다음 결제에 필요한 여유를 우선 확인해 보세요."}, model
     _explain.cache_clear()
-    with patch("app.services.ai_briefing.configured",return_value=True), \\
-         patch("app.services.ai_briefing.structured_text",side_effect=fake_provider):
+    with (patch("app.services.ai_briefing.configured", return_value=True),
+          patch("app.services.ai_briefing.structured_text", side_effect=fake_provider)):
         result = ai_briefing(ds,"S01",date(2026,11,4))
     _explain.cache_clear()
     assert result["llm_used"] is True
