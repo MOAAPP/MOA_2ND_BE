@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "regions": ["icn1"],
+  "rewrites": [
+    {"source": "/api/v4/:path*", "destination": "/api/index.py"},
+    {"source": "/docs", "destination": "/api/index.py"},
+    {"source": "/openapi.json", "destination": "/api/index.py"},
+    {"source": "/redoc", "destination": "/api/index.py"}
+  ]
+}
