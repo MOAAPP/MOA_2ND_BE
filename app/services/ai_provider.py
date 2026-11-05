@@ -32,16 +32,24 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
     try:
         from openai import OpenAI
         client = OpenAI(api_key=key, base_url=base, timeout=18, max_retries=0)
-        response = client.chat.completions.create(
-            model=model or default_model,
-            messages=[
-                {"role": "system", "content": system},
+        selected_model = model or default_model
+        params = {
+            "model": selected_model,
+            "messages": [
+                {"role": "system", "content": system + "\\n반드시 설명이나 코드블록 없이 JSON 객체만 응답하라."},
                 {"role": "user", "content": json.dumps(facts, ensure_ascii=False)},
             ],
-            response_format={"type": "json_object"},
-            temperature=0,
-            max_tokens=max_tokens,
-        )
+            "temperature": 0,
+            "max_tokens": max_tokens,
+        }
+        # FactChat's public gateway documents json_schema but not the older
+        # OpenAI json_object mode. Some routed models (Claude) reject the
+        # unsupported response_format with HTTP 400. We still strictly
+        # validate the JSON object after the call; never fabricate an LLM
+        # success for an invalid response.
+        if "factchat-cloud.mindlogic.ai/v1/gateway" not in base.rstrip("/").lower():
+            params["response_format"] = {"type": "json_object"}
+        response = client.chat.completions.create(**params)
         raw = response.choices[0].message.content
         result = json.loads(raw or "")
         if not isinstance(result, dict):
