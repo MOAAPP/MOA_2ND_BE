@@ -12,6 +12,7 @@ from app.api.finance import dataset_dep
 from app.core.settings import BACKEND_DIR, DEFAULT_DEMO_USER_ID
 from app.schemas import CalculationRequest
 from app.services.dataset import Dataset
+from app.services.observed_view import for_user_date
 from app.services.finance import FinanceProblem, calculate, state_for, kst
 from app.services.stage3 import compare_worlds
 from app.ml.forecast import run_forecast, to_events, ForecastProblem
@@ -66,6 +67,8 @@ def demo_default(ds: Dataset = Depends(dataset_dep)):
 @router.get("/users/{user_id}/home", summary="메인 화면용 단일 사용자 금융 상태")
 def user_home(user_id: str, as_of: date | None = Query(default=None),
               ds: Dataset = Depends(dataset_dep)):
+    canonical_end = ds.meta["snapshot_date"]
+    ds = for_user_date(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     try:
@@ -98,10 +101,11 @@ def user_home(user_id: str, as_of: date | None = Query(default=None),
         "user_id": user_id,
         "display_name": u.profile.get("description", user_id),
         "as_of_date": day, "observation_start": ds.meta["start_date"],
-        "observation_end": ds.meta["snapshot_date"],
+        "observation_end": canonical_end,
         "has_observation_on_date": day.isoformat() in observed_days,
         "data_source": ds.meta["dataset_id"], "is_synthetic": True,
-        "financial_state_status": "available",
+        "financial_state_status": ("partial_post_snapshot" if day.isoformat() > canonical_end
+                                   else "available"),
         "current_account_id": state.account_id,
         "available_cash": state.available_cash,
         "balance_snapshot_at": state.balance_snapshot_at,
@@ -117,7 +121,8 @@ def user_home(user_id: str, as_of: date | None = Query(default=None),
         "savings_goal_status": "not_in_canonical_dataset" if not state.savings_goals else "available",
         "virtual_investments": state.virtual_investments,
         "purchase_candidates": candidates[-5:],
-        "warnings": result.warnings,
+        "warnings": result.warnings + (["post_snapshot_only_confirmed_local_sms_not_complete_day"]
+                                        if day.isoformat() > canonical_end else []),
         "variable_forecast": variable_forecast,
     }
 
@@ -125,6 +130,7 @@ def user_home(user_id: str, as_of: date | None = Query(default=None),
 @router.get("/users/{user_id}/transactions", summary="기준일까지의 관측 확정 거래")
 def user_transactions(user_id: str, as_of: date | None = None, limit: int = Query(100, ge=1, le=1000),
                       ds: Dataset = Depends(dataset_dep)):
+    ds = for_user_date(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     transactions = sorted((tx for tx in u.transactions if _observed(tx, day)),
@@ -135,6 +141,7 @@ def user_transactions(user_id: str, as_of: date | None = None, limit: int = Quer
 @router.get("/users/{user_id}/schedules", summary="사용자별 등록 금융 일정")
 def user_schedules(user_id: str, as_of: date | None = None,
                    ds: Dataset = Depends(dataset_dep)):
+    ds = for_user_date(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     return {"user_id": user_id, "as_of_date": day,
@@ -145,6 +152,7 @@ def user_schedules(user_id: str, as_of: date | None = None,
 
 @router.get("/instruments", summary="데이터셋의 가상 ETF/주식 테스트 시세")
 def instruments(user_id: str = "S01", as_of: date | None = None, ds: Dataset = Depends(dataset_dep)):
+    ds = for_user_date(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     prices = {}
@@ -159,6 +167,7 @@ def instruments(user_id: str = "S01", as_of: date | None = None, ds: Dataset = D
 @router.post("/scenarios/compare", response_model=WorldCompareResult,
              summary="동일 기준 상태에서 여섯 평행세계 계산")
 def compare(payload: WorldCompareRequest, ds: Dataset = Depends(dataset_dep)):
+    ds = for_user_date(ds, payload.user_id, payload.as_of)
     _user(ds, payload.user_id)
     try:
         return compare_worlds(ds, payload)
@@ -175,6 +184,7 @@ class ScenarioSaveRequest(BaseModel):
 
 @router.post("/scenarios/save", summary="원본 데이터셋과 분리된 가상 선택 저장")
 def save_scenario(payload: ScenarioSaveRequest, ds: Dataset = Depends(dataset_dep)):
+    ds = for_user_date(ds, payload.request.user_id, payload.request.as_of)
     result = compare(payload.request, ds)
     selected = next((p for p in result.paths if p.scenario_id == payload.selected_scenario_id), None)
     if selected is None:
@@ -217,6 +227,7 @@ def get_saved_scenario(scenario_id: str, ds: Dataset = Depends(dataset_dep)):
 @router.get("/ml/forecast-context", summary="4단계 ML용 관측 특징 입력 (미래 정답 제외)")
 def ml_context(user_id: str = "S01", as_of: date | None = None,
                ds: Dataset = Depends(dataset_dep)):
+    ds = for_user_date(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     observations = [d for d in u.daily if d.get("date", "") <= day.isoformat()
