@@ -14,6 +14,7 @@ from app.services.dataset import Dataset
 from app.services.agent_paths import GoalConditions, SearchRequest, SearchResult, search_paths
 from app.services.agent_llm import AgentFailure, run_agent
 from app.services.finance import FinanceProblem
+from app.ml.forecast import run_forecast
 
 router = APIRouter(prefix="/api/v4/agent", tags=["v4-stage5-agent"])
 SAVE_DIR = BACKEND_DIR / "app/data/runtime/agent_routes"
@@ -86,6 +87,9 @@ def save_route(payload: SaveRouteRequest, ds: Dataset = Depends(dataset_dep)):
                            "investment_amount": matched.investment_amount,
                            "payment_method": matched.payment_method, "kind": matched.kind},
         "verified_minimum_balance": matched.minimum_balance,
+        "result_snapshot": matched.model_dump(mode="json"),
+        "forecast_snapshot": run_forecast(ds, uid, payload.search_request.conditions.as_of,
+                                           payload.search_request.horizon_days),
     }
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = SAVE_DIR / (identifier + ".tmp")
