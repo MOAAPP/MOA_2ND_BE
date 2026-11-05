@@ -311,6 +311,61 @@ def list_saved_plans(ds: Dataset, user_id: str):
     return {"user_id": user_id, "plans": plans, "is_synthetic": True}
 
 
+def revalidate_plan(ds: Dataset, kind: str, record: dict, day: date):
+    """Re-evaluate a frozen choice at a later observation cutoff, never rewrite it."""
+    if kind == "world":
+        from app.services.stage3 import compare_worlds
+        from app.stage3_models import WorldCompareRequest
+        req = WorldCompareRequest.model_validate(record["request"])
+        selected = record.get("selected_scenario_id", "purchase_now")
+        if req.purchase_date and req.purchase_date <= day and selected != "no_purchase":
+            return {"status": "needs_revision", "reason": "saved_purchase_date_has_passed"}
+        if req.purchase_date and req.purchase_date <= day and selected == "no_purchase":
+            req = req.model_copy(update={"purchase_date": day + timedelta(days=1)})
+        req = req.model_copy(update={"as_of": day})
+        try:
+            result = compare_worlds(ds, req)
+        except (FinanceProblem, ValueError) as exc:
+            return {"status": "needs_revision", "reason": str(exc)}
+        path = next((p for p in result.paths if p.scenario_id == selected), None)
+        if path is None:
+            return {"status": "unavailable", "reason": "selected_world_not_returned"}
+        valid = path.status == "calculated" and path.minimum_balance_met and path.essential_payments_covered
+        old_path = record.get("selected_scenario_snapshot") or next(
+            (p for p in record["result_snapshot"]["paths"] if p["scenario_id"] == selected), {})
+        return {"status": "valid" if valid else "constraints_broken",
+                "scenario_id": selected, "as_of_date": day.isoformat(),
+                "saved_minimum_balance": old_path.get("minimum_balance"),
+                "recalculated_minimum_balance": path.minimum_balance,
+                "minimum_balance_delta": (path.minimum_balance - old_path["minimum_balance"]
+                                          if old_path.get("minimum_balance") is not None else None),
+                "essential_payments_covered": path.essential_payments_covered,
+                "minimum_balance_met": path.minimum_balance_met}
+    if kind == "agent":
+        from app.services.agent_paths import SearchRequest, search_paths
+        req = SearchRequest.model_validate(record["search_request"])
+        req = req.model_copy(update={"conditions": req.conditions.model_copy(update={"as_of": day})})
+        try:
+            result = search_paths(ds, req)
+        except (FinanceProblem, ValueError) as exc:
+            return {"status": "needs_revision", "reason": str(exc)}
+        identity = record["route_identity"]
+        def matches(route):
+            return (route.kind == identity["kind"] and route.purchase_amount == identity["purchase_amount"]
+                    and route.savings_amount == identity["savings_amount"]
+                    and route.investment_amount == identity["investment_amount"]
+                    and route.payment_method == identity["payment_method"]
+                    and (route.purchase_date.isoformat() if route.purchase_date else None) == identity["purchase_date"])
+        selected = next((r for r in result.routes if matches(r)), None)
+        if selected is None:
+            return {"status": "needs_revision", "reason": "saved_agent_route_not_available"}
+        return {"status": "valid" if selected.hard_constraints_met else "constraints_broken",
+                "as_of_date": day.isoformat(), "saved_minimum_balance": record.get("verified_minimum_balance"),
+                "recalculated_minimum_balance": selected.minimum_balance,
+                "essential_payments_covered": selected.scenario.essential_payments_covered}
+    return {"status": "unavailable", "reason": "unknown_saved_plan_kind"}
+
+
 def track_plan(ds: Dataset, user_id: str, plan_id: str, as_of: date | None):
     _user(ds, user_id)
     day = _day(ds, as_of)
@@ -339,6 +394,7 @@ def track_plan(ds: Dataset, user_id: str, plan_id: str, as_of: date | None):
             return {"user_id": user_id, "id": plan_id, "kind": kind,
                     "status": "legacy_snapshot_unavailable", "snapshot_preserved": False,
                     "message": "기존 저장 기록에 당시의 전체 계산 결과가 없어 비교를 확정할 수 없어요."}
+        refreshed = revalidate_plan(ds, kind, record, day)
         ledger = observed_ledger(_user(ds, user_id), day)
         rows = (forecast or {}).get("daily", [])
         observations = []
@@ -361,6 +417,7 @@ def track_plan(ds: Dataset, user_id: str, plan_id: str, as_of: date | None):
                 "status": "compared" if observations else "no_new_observable_days",
                 "snapshot_preserved": True,
                 "saved_result": snapshot,
+                "revalidation": refreshed,
                 "daily_spend_comparison": observations,
                 "note": "관측 누락과 예측 오차를 구분하며 구매 여부는 거래 확인 없이 단정하지 않아요."}
     raise KeyError(plan_id)
