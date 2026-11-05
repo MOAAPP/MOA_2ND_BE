@@ -168,12 +168,17 @@ def compare(payload: WorldCompareRequest, ds: Dataset = Depends(dataset_dep)):
 
 class ScenarioSaveRequest(BaseModel):
     request: WorldCompareRequest
+    selected_scenario_id: str = Field(default="purchase_now",
+        pattern="^(purchase_now|no_purchase|purchase_delay|virtual_savings|virtual_investment|mixed)$")
     label: str = Field(default="저장한 가상 선택", min_length=1, max_length=80)
 
 
 @router.post("/scenarios/save", summary="원본 데이터셋과 분리된 가상 선택 저장")
 def save_scenario(payload: ScenarioSaveRequest, ds: Dataset = Depends(dataset_dep)):
     result = compare(payload.request, ds)
+    selected = next((p for p in result.paths if p.scenario_id == payload.selected_scenario_id), None)
+    if selected is None:
+        raise HTTPException(422, {"code": "selected_path_missing"})
     identifier = uuid4().hex
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     target = STORAGE_DIR / (identifier + ".json")
@@ -186,6 +191,8 @@ def save_scenario(payload: ScenarioSaveRequest, ds: Dataset = Depends(dataset_de
                             "status": p.status} for p in result.paths],
         # Freeze the original computed paths; later observations never rewrite this result.
         "result_snapshot": result.model_dump(mode="json"),
+        "selected_scenario_id": selected.scenario_id,
+        "selected_scenario_snapshot": selected.model_dump(mode="json"),
         "forecast_snapshot": run_forecast(ds, payload.request.user_id,
                                            result.as_of, payload.request.horizon_days),
     }
