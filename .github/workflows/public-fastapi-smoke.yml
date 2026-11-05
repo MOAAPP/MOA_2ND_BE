@@ -1,0 +1,34 @@
+name: Verify public FastAPI health and 20-persona financial briefing
+on:
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'vercel.json'
+      - '.github/workflows/public-fastapi-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify HTTPS API is publicly reachable and not a login page
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          root = "https://moa-finance-api.vercel.app"
+          for suffix in ("/api/v4/health", "/api/v4/users/S01/briefing?as_of=2026-11-04"):
+              req = urllib.request.Request(root + suffix, headers={"Accept":"application/json","User-Agent":"MOA-API-Healthcheck"})
+              with urllib.request.urlopen(req, timeout=35) as res:
+                  data = json.load(res)
+                  print(suffix, res.status, str(data)[:350])
+                  assert res.status == 200
+                  if suffix.endswith("/health"):
+                      assert data["users"] == 20 and data["synthetic"] is True
+                  else:
+                      assert data["user_id"] == "S01"
+                      assert data["spending_capacity"]["current_cash"] == 27800
+          PY
