@@ -4,6 +4,7 @@ from fastapi import APIRouter,Depends,HTTPException,Query
 from app.api.finance import dataset_dep
 from app.schemas import CalculationRequest
 from app.services.dataset import Dataset
+from app.services.observed_view import for_user_date
 from app.services.finance import calculate,FinanceProblem
 from app.ml.forecast import ForecastProblem,run_forecast,to_events
 
@@ -14,7 +15,7 @@ def forecast_or_error(ds,user_id,as_of,horizon):
         raise HTTPException(404,{"code":"user_not_found","user_id":user_id})
     as_of=as_of or date.fromisoformat(ds.meta["snapshot_date"])
     try:
-        return run_forecast(ds,user_id,as_of,horizon)
+        return run_forecast(for_user_date(ds,user_id,as_of),user_id,as_of,horizon)
     except ForecastProblem as exc:
         raise HTTPException(422,{"code":"forecast_unavailable","message":str(exc)}) from exc
 
@@ -27,6 +28,7 @@ def forecast(user_id:str,as_of:date|None=None,horizon_days:int=Query(14,ge=14,le
 def forecast_cashflow(user_id:str,as_of:date|None=None,horizon_days:int=Query(14,ge=14,le=90),
                       scenario:str=Query("base",pattern="^(base|spending_high|income_delay|combined)$"),
                       income_delay_days:int=Query(3,ge=0,le=31),ds:Dataset=Depends(dataset_dep)):
+    ds=for_user_date(ds,user_id,as_of)
     model=forecast_or_error(ds,user_id,as_of,horizon_days)
     if model["model_type"]=="unavailable":
         raise HTTPException(422,{"code":"not_enough_complete_observations"})
