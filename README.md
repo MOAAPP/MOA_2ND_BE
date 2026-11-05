@@ -1,3 +1,13 @@
+> **V4.0 7단계 통합 검증 브랜치 (2026-11-05)**  
+> `fix/v4-stage7-integration-audit-20261105`를 체크아웃하세요. 이 브랜치는 6단계 FastAPI/ML/에이전트 코드 위에 7단계 과거 기준일 조회·20명 메인 잔액 회귀 테스트를 추가합니다. 기본 `main`에는 아직 3~6단계 기능이 통합되지 않았으므로 `main` 실행 결과만으로 기능이 없다고 판단하지 마세요.  
+> 최초 설치: `python3.12 -m venv .venv && source .venv/bin/activate && python -m pip install -r requirements.txt`  
+> 테스트: `python -m pytest -q tests/test_stage7.py tests/test_stage6.py tests/test_stage3.py tests/test_ml.py tests/test_agent.py tests/test_finance.py`  
+> 모델 학습: `python -m app.ml.train` (선택, 데이터가 충분한 날짜에서만)  
+> 서버: `python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`  
+> Swagger: http://127.0.0.1:8000/docs · 데이터: http://127.0.0.1:8000/api/v4/demo/default · 홈: http://127.0.0.1:8000/api/v4/users/S01/home?as_of=2026-11-04  
+> LLM 비전 인식은 서버 `OPENAI_API_KEY`, 에이전트는 서버 `MOA_AGENT_API_KEY`가 필요하며, 키를 넣지 않은 상태에서 성공했다고 주장하지 않습니다. 테스트 데이터는 실사용자 금융 데이터가 아닌 20명 합성 자료입니다.  
+> 실행 검증 현황·한계: [docs/V4_STAGE7_VERIFICATION.md](docs/V4_STAGE7_VERIFICATION.md)
+
 # 평행통장 V4.0 — Python 금융 계산 백엔드
 
 이 저장소는 평행통장의 **금융 계산 백엔드 (Python 3.10+ / FastAPI)** 전용입니다.
