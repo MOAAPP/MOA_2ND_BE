@@ -137,6 +137,15 @@ def _facts(ds: Dataset, user_id: str, day: date, minimum_balance: int):
         for x in result.essential_payment_results
     ]
     virtual = result.virtual_investments
+    scheduled = [event for row in result.daily_cashflow for event in row.events
+                 if event.transaction_status == "scheduled"]
+    incomes = [{"id": x.id, "date": x.debit_at.date().isoformat(),
+                "amount": x.amount, "label": x.label}
+               for x in scheduled if x.amount > 0]
+    card_bills = [{"id": x.id, "date": x.debit_at.date().isoformat(),
+                   "amount": x.amount, "label": x.label}
+                  for row in result.daily_cashflow for x in row.events
+                  if x.kind == "credit_card_bill"]
     return {
         "user_id": user_id, "as_of_date": day.isoformat(),
         "dataset_id": ds.meta["dataset_id"], "minimum_balance": result.minimum_balance,
@@ -145,6 +154,7 @@ def _facts(ds: Dataset, user_id: str, day: date, minimum_balance: int):
         "forecast_type": forecast["model_type"], "forecast_version": forecast.get("model_version"),
         "observed_transaction_ids": observed,
         "essential_payments": essential,
+        "scheduled_incomes": incomes, "credit_card_bills": card_bills,
         "virtual_investments": virtual,
         "savings_goals": result.savings_goals,
         "nearby_essential": essential[:5],
@@ -166,7 +176,12 @@ def _atomic(target: Path, value: dict):
             json.dump(value, fh, ensure_ascii=False, indent=2)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(temp, target)
+        try:
+            # Atomic first-writer-wins: concurrent reads/saves must never replace
+            # the original analysis snapshot for this user and observation day.
+            os.link(temp, target)
+        except FileExistsError:
+            pass
     finally:
         temp.unlink(missing_ok=True)
 
@@ -210,11 +225,20 @@ def detect_changes(before: dict | None, now: dict):
     if diff < 0:
         add("minimum_balance_decreased", "high" if now["minimum_balance"] < 0 else "medium",
             "예상 최저 잔액이 낮아졌어요", diff)
-    first_due = {(p["date"], p["name"], p["amount"]) for p in before.get("essential_payments", [])}
+    previous_risk = {(p["date"], p["name"]) for p in before.get("essential_payments", [])
+                     if not p["covered"]}
     due_added = [x for x in now["essential_payments"]
-                 if (x["date"], x["name"], x["amount"]) not in first_due and not x["covered"]]
+                 if not x["covered"] and (x["date"], x["name"]) not in previous_risk]
     if due_added:
-        add("new_essential_risk", "high", f"확인이 필요한 필수결제 {len(due_added)}건", len(due_added))
+        add("new_essential_risk", "high", f"새로 감지된 필수결제 부족 위험 {len(due_added)}건", len(due_added))
+    def changed_schedule(field):
+        earlier = {r["id"]: r for r in before.get(field, [])}
+        return [r for r in now.get(field, []) if r["id"] in earlier
+                and (r["date"], r["amount"]) != (earlier[r["id"]]["date"], earlier[r["id"]]["amount"])]
+    if changed_schedule("scheduled_incomes"):
+        add("income_schedule_changed", "medium", "예정 수입의 날짜나 금액이 달라졌어요")
+    if changed_schedule("credit_card_bills"):
+        add("credit_card_bill_changed", "medium", "예정 카드 청구액이나 출금일이 달라졌어요")
     if now["forecast_total"] > before.get("forecast_total", 0):
         add("variable_forecast_increased", "medium", "향후 변동 지출 전망이 증가했어요",
             now["forecast_total"] - before["forecast_total"])
@@ -280,7 +304,8 @@ def list_saved_plans(ds: Dataset, user_id: str):
                 continue
             plans.append({"id": record.get("id"), "kind": kind, "label": record.get("label"),
                           "saved_at": record.get("saved_at"),
-                          "analysis_as_of": record.get("as_of") or record.get("request", {}).get("as_of"),
+                          "analysis_as_of": (record.get("as_of") or record.get("request", {}).get("as_of")
+                                             or record.get("result_snapshot", {}).get("as_of")),
                           "has_immutable_snapshot": "result_snapshot" in record})
     plans.sort(key=lambda p: p["saved_at"] or "", reverse=True)
     return {"user_id": user_id, "plans": plans, "is_synthetic": True}
@@ -324,8 +349,12 @@ def track_plan(ds: Dataset, user_id: str, plan_id: str, as_of: date | None):
                 observations.append({
                     "date": row["date"], "predicted": row["amount"],
                     "observed": actual["outflow"] if actual and actual["complete"] else None,
-                    "classification": ("prediction_difference" if actual and actual["complete"]
-                                       else "observation_unavailable"),
+                    "classification": (
+                        "observation_unavailable" if not actual or not actual["complete"]
+                        else "matches_prediction" if row["amount"] == actual["outflow"]
+                        else "prediction_difference_not_attributed"),
+                    "difference": (actual["outflow"] - row["amount"]
+                                   if actual and actual["complete"] else None),
                 })
         return {"user_id": user_id, "id": plan_id, "kind": kind,
                 "saved_analysis_date": saved_day.isoformat(), "tracking_date": day.isoformat(),
