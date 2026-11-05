@@ -10,7 +10,8 @@ import json
 import os
 import re
 import threading
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from uuid import uuid4
 
@@ -98,10 +99,13 @@ def _existing(user_id: str):
 def _topic(user_id: str, day: str, old: list[dict]):
     wrongs = [r["topic"] for r in old if r.get("answer_record", {}).get("correct") is False]
     if wrongs:
-        last = wrongs[-1]
-        # Review the last missed concept on the next session.
-        if old and old[-1].get("topic") != last:
-            return last, "recent_wrong_answer"
+        # Prioritize the last wrong concept until a later correct answer
+        # on that topic supersedes it, without leaking other personas.
+        for row in reversed(old):
+            if row.get("topic") == wrongs[-1] and row.get("answer_record"):
+                if row["answer_record"].get("correct") is False:
+                    return wrongs[-1], "recent_wrong_answer"
+                break
     idx = int(hashlib.sha256((user_id + day).encode()).hexdigest()[:8], 16) % len(TOPICS)
     return TOPICS[idx], "date_persona_rotation"
 
@@ -168,7 +172,7 @@ def quiz_for(ds, user_id: str, day: date) -> dict:
     if user_id not in ds.profiles:
         raise KeyError(user_id)
     day_text = day.isoformat()
-    if day < date.fromisoformat(ds.meta["start_date"]) or day > date.today():
+    if day < date.fromisoformat(ds.meta["start_date"]) or day > datetime.now(ZoneInfo("Asia/Seoul")).date():
         raise ValueError("quiz_date_not_available")
     with _LOCK:
         path = _path(user_id, day_text)
