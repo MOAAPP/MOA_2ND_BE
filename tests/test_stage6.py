@@ -98,3 +98,39 @@ def test_change_detector_facts_not_llm():
     assert changed["status"] == "changed"
     assert {x["code"] for x in changed["events"]} >= {
         "new_transactions", "minimum_balance_decreased", "variable_forecast_increased"}
+
+
+def test_saved_world_is_immutable_and_revalidated_on_observed_next_day(tmp_path, monkeypatch):
+    import app.api.stage3 as stage3
+    import app.api.agent as agent
+    monkeypatch.setattr(stage3, "STORAGE_DIR", tmp_path / "worlds")
+    monkeypatch.setattr(agent, "SAVE_DIR", tmp_path / "agent")
+    payload = {
+        "request": {
+            "user_id": "S01", "as_of": "2026-11-03",
+            "purchase_amount": 1000, "purchase_date": "2026-11-05",
+            "horizon_days": 14, "minimum_required_balance": 0,
+        },
+        "selected_scenario_id": "no_purchase",
+        "label": "S01 미래 관측 테스트",
+    }
+    create = client.post("/api/v4/scenarios/save", json=payload)
+    assert create.status_code == 200, create.text[:500]
+    sid = create.json()["id"]
+    path = stage3.STORAGE_DIR / (sid + ".json")
+    before = path.read_bytes()
+    saved = json.loads(before)
+    assert saved["selected_scenario_id"] == "no_purchase"
+    assert saved["result_snapshot"]["user_id"] == "S01"
+    assert saved["forecast_snapshot"]["forecast_as_of"] == "2026-11-03"
+    listed = client.get("/api/v4/users/S01/plans").json()
+    assert sid in [plan["id"] for plan in listed["plans"]]
+    assert sid not in [plan["id"] for plan in client.get("/api/v4/users/S02/plans").json()["plans"]]
+    tracked = client.get(f"/api/v4/users/S01/plans/{sid}/tracking?as_of=2026-11-04")
+    assert tracked.status_code == 200, tracked.text[:500]
+    result = tracked.json()
+    assert result["snapshot_preserved"] is True
+    assert result["revalidation"]["status"] in ("valid", "constraints_broken", "needs_revision")
+    assert len(result["daily_spend_comparison"]) == 1
+    assert path.read_bytes() == before
+    assert client.get(f"/api/v4/users/S02/plans/{sid}/tracking?as_of=2026-11-04").status_code == 404
