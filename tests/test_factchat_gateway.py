@@ -54,7 +54,7 @@ def test_factchat_fenced_json_response_is_verified(monkeypatch):
     monkeypatch.setenv("MOA_AI_BASE_URL", "https://factchat-cloud.mindlogic.ai/v1/gateway")
     with patch("openai.OpenAI") as sdk:
         sdk.return_value.chat.completions.create.return_value = _response(
-            '```json\\n{"explanation":"다가오는 필수 결제를 먼저 확인해요."}\\n```')
+            '```json\n{"explanation":"다가오는 필수 결제를 먼저 확인해요."}\n```')
         result, _ = structured_text("Return JSON", {"uid": "S01"})
     assert result["explanation"] == "다가오는 필수 결제를 먼저 확인해요."
 
