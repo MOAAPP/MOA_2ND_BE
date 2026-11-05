@@ -23,6 +23,15 @@ DEMO_USER_ID = DEFAULT_DEMO_USER_ID
 STORAGE_DIR = Path(os.environ.get("MOA_STAGE3_STORAGE_DIR", str(BACKEND_DIR / "app/data/runtime/scenarios"))).resolve()
 
 
+def _effective(ds: Dataset, user_id: str, day: date | None):
+    try:
+        return for_user_date(ds, user_id, day)
+    except KeyError as exc:
+        raise HTTPException(404, {"code": "user_not_found"}) from exc
+    except ValueError as exc:
+        raise HTTPException(422, {"code": "date_invalid", "message": str(exc)}) from exc
+
+
 def _user(ds: Dataset, user_id: str):
     try:
         return ds.get_user(user_id)
@@ -68,7 +77,7 @@ def demo_default(ds: Dataset = Depends(dataset_dep)):
 def user_home(user_id: str, as_of: date | None = Query(default=None),
               ds: Dataset = Depends(dataset_dep)):
     canonical_end = ds.meta["snapshot_date"]
-    ds = for_user_date(ds, user_id, as_of)
+    ds = _effective(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     try:
@@ -130,7 +139,7 @@ def user_home(user_id: str, as_of: date | None = Query(default=None),
 @router.get("/users/{user_id}/transactions", summary="기준일까지의 관측 확정 거래")
 def user_transactions(user_id: str, as_of: date | None = None, limit: int = Query(100, ge=1, le=1000),
                       ds: Dataset = Depends(dataset_dep)):
-    ds = for_user_date(ds, user_id, as_of)
+    ds = _effective(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     transactions = sorted((tx for tx in u.transactions if _observed(tx, day)),
@@ -141,7 +150,7 @@ def user_transactions(user_id: str, as_of: date | None = None, limit: int = Quer
 @router.get("/users/{user_id}/schedules", summary="사용자별 등록 금융 일정")
 def user_schedules(user_id: str, as_of: date | None = None,
                    ds: Dataset = Depends(dataset_dep)):
-    ds = for_user_date(ds, user_id, as_of)
+    ds = _effective(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     return {"user_id": user_id, "as_of_date": day,
@@ -152,7 +161,7 @@ def user_schedules(user_id: str, as_of: date | None = None,
 
 @router.get("/instruments", summary="데이터셋의 가상 ETF/주식 테스트 시세")
 def instruments(user_id: str = "S01", as_of: date | None = None, ds: Dataset = Depends(dataset_dep)):
-    ds = for_user_date(ds, user_id, as_of)
+    ds = _effective(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     prices = {}
@@ -167,7 +176,7 @@ def instruments(user_id: str = "S01", as_of: date | None = None, ds: Dataset = D
 @router.post("/scenarios/compare", response_model=WorldCompareResult,
              summary="동일 기준 상태에서 여섯 평행세계 계산")
 def compare(payload: WorldCompareRequest, ds: Dataset = Depends(dataset_dep)):
-    ds = for_user_date(ds, payload.user_id, payload.as_of)
+    ds = _effective(ds, payload.user_id, payload.as_of)
     _user(ds, payload.user_id)
     try:
         return compare_worlds(ds, payload)
@@ -184,7 +193,7 @@ class ScenarioSaveRequest(BaseModel):
 
 @router.post("/scenarios/save", summary="원본 데이터셋과 분리된 가상 선택 저장")
 def save_scenario(payload: ScenarioSaveRequest, ds: Dataset = Depends(dataset_dep)):
-    ds = for_user_date(ds, payload.request.user_id, payload.request.as_of)
+    ds = _effective(ds, payload.request.user_id, payload.request.as_of)
     result = compare(payload.request, ds)
     selected = next((p for p in result.paths if p.scenario_id == payload.selected_scenario_id), None)
     if selected is None:
@@ -227,7 +236,7 @@ def get_saved_scenario(scenario_id: str, ds: Dataset = Depends(dataset_dep)):
 @router.get("/ml/forecast-context", summary="4단계 ML용 관측 특징 입력 (미래 정답 제외)")
 def ml_context(user_id: str = "S01", as_of: date | None = None,
                ds: Dataset = Depends(dataset_dep)):
-    ds = for_user_date(ds, user_id, as_of)
+    ds = _effective(ds, user_id, as_of)
     u = _user(ds, user_id)
     day = _day(ds, as_of)
     observations = [d for d in u.daily if d.get("date", "") <= day.isoformat()
