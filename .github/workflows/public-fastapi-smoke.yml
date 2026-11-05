@@ -20,6 +20,12 @@ jobs:
           python - <<'PY'
           import json, urllib.request
           root = "https://moa-finance-api.vercel.app"
+          for test in ("/", "/docs", "/api/index.py", "/app/main.py", "/api/v4/health"):
+              try:
+                  with urllib.request.urlopen(root+test, timeout=12) as res:
+                      print("PROBE",test,res.status,res.read(180),flush=True)
+              except Exception as e:
+                  print("PROBE",test,str(e),flush=True)
           for suffix in ("/api/v4/health", "/api/v4/users/S01/briefing?as_of=2026-11-04"):
               req = urllib.request.Request(root + suffix, headers={"Accept":"application/json","User-Agent":"MOA-API-Healthcheck"})
               with urllib.request.urlopen(req, timeout=35) as res:
