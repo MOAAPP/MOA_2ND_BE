@@ -72,5 +72,5 @@ def test_stage7_openapi_has_real_registered_handlers():
         "/api/v4/users/{user_id}/forecast", "/api/v4/users/{user_id}/briefing",
         "/api/v4/users/{user_id}/spending-capacity", "/api/v4/scenarios/compare",
     }
-    assert not (required - paths), required - paths
+    assert not (required - set(paths)), required - set(paths)
     assert client.get("/docs").status_code == 200
