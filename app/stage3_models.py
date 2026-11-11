@@ -4,6 +4,7 @@ The input dataset remains immutable. Amounts are in integer KRW.
 """
 from __future__ import annotations
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -151,3 +152,64 @@ class SavedScenario(BaseModel):
     user_id: str
     request: WorldCompareRequest
     saved_at: datetime
+
+
+class SavingsPlanRequest(BaseModel):
+    """Hypothetical recurring savings goal; never an actual bank transfer."""
+    model_config = ConfigDict(extra="forbid")
+    user_id: str = Field(pattern=r"^S\d\d$")
+    as_of: date | None = None
+    goal_amount: int = Field(ge=1)
+    current_savings: int = Field(default=0, ge=0)
+    deposit_amount: int = Field(ge=0)
+    first_deposit_amount: int | None = Field(default=None, ge=0)
+    deposit_frequency: Literal["monthly", "biweekly", "weekly"] = "monthly"
+    duration_months: Literal[3, 6, 12] = 6
+    start_date: date | None = None
+    annual_rate_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    minimum_required_balance: int = Field(default=0, ge=0)
+    stress: Literal["baseline", "higher_spending", "delayed_income", "combined"] = "baseline"
+    forecast_daily_spend_override: int | None = Field(default=None, ge=0)
+
+
+class SavingsPlanPoint(BaseModel):
+    date: date
+    deposit_amount: int
+    principal_balance: int
+    interest_credited: int
+    projected_balance: int
+    goal_progress_percent: float
+
+
+class SavingsPlanResult(BaseModel):
+    user_id: str
+    as_of: date
+    dataset_id: str
+    source: Literal["hypothetical_synthetic_dataset"] = "hypothetical_synthetic_dataset"
+    goal_amount: int
+    current_savings: int
+    start_date: date
+    maturity_date: date
+    deposit_frequency: Literal["monthly", "biweekly", "weekly"]
+    duration_months: Literal[3, 6, 12]
+    planned_deposit_count: int
+    planned_deposits_total: int
+    projected_principal: int
+    estimated_interest_before_tax: int | None
+    projected_maturity_balance: int
+    projected_goal_progress_percent: float
+    remaining_goal_amount: int
+    goal_reached_date: date | None
+    goal_reached_by_maturity: bool
+    timeline: list[SavingsPlanPoint]
+    cashflow_validation_days: int
+    cashflow_validated_through: date
+    cashflow_validation_status: Literal["satisfies_assumptions", "fails_assumptions"]
+    minimum_payment_account_balance: int
+    minimum_required_balance_met: bool
+    essential_payments_covered: bool
+    first_shortfall_date: date | None
+    deposits_within_validation: int
+    deposits_beyond_validation: int
+    cashflow_preview: list[ScenarioDay]
+    warnings: list[str] = Field(default_factory=list)
