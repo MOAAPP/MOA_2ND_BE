@@ -132,6 +132,12 @@ def _dominates(a: Route, b: Route) -> bool:
 
 
 def _label(purchase: int, savings: int, invest: int, delay: int) -> str:
+    if purchase and savings and invest:
+        return "구매·저축·가상투자 병행" if not delay else "구매 시점 조정·저축·가상투자 병행"
+    if savings and invest:
+        return "저축·가상투자 병행"
+    if purchase and invest:
+        return "구매·가상투자 병행"
     if purchase and savings:
         return "구매와 저축 병행" if not delay else "구매 시점 조정·저축 병행"
     if purchase:
@@ -203,7 +209,11 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
     savings_options = [savings_min] if savings_min else [0, max(0, price // 4)]
     investments = [0]
     if g.investment_allowed and g.maximum_investment_amount:
-        investments.append(min(g.maximum_investment_amount, max(1, price // 4)))
+        # Without a purchase goal, do not derive an invented 1 KRW investment.
+        # The cap is explicitly supplied by the user.
+        proposed_investment = min(g.maximum_investment_amount, price // 4) if price else g.maximum_investment_amount
+        if proposed_investment:
+            investments.append(proposed_investment)
     reductions = [0]
     # "adjustable" category must be explicitly provided; no assumptions about editable spending.
     if g.adjustable_expense_categories and g.maximum_spending_reduction:
@@ -237,7 +247,8 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         if method == "credit" and g.credit_debit_date and g.credit_debit_date < base_day:
             failures["credit_settlement_before_purchase"] += 1
             continue
-        if purchase and (savings or invest):
+        if (purchase and (savings or invest)) or (savings and invest):
+            # Both savings and investment require the mixed ledger even without a purchase.
             kind = "mixed"
             allocation = Allocation(purchase=purchase, savings=savings, investment=invest, cash=0)
         elif purchase:
@@ -279,12 +290,16 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         if path is None or path.status != "calculated":
             failures["unconfirmed_or_invalid_financial_path"] += 1
             continue
+        # A budget below one full share is NOT an executed investment.
+        invested_cash = sum(e.amount for e in path.events if e.event_type == "virtual_investment_buy")
         checks = {
             "essential_bills": path.essential_payments_covered,
             "minimum_balance": path.minimum_balance >= (g.minimum_balance or 0),
             "purchase_requirement": not g.purchase_required or bool(path.purchase_completed),
             "required_savings": path.virtual_savings >= savings_min,
+            "savings_execution": path.virtual_savings >= savings,
             "investment_permission": g.investment_allowed or invest == 0,
+            "investment_execution": invest == 0 or invested_cash > 0,
             "purchase_deadline": not day or not g.latest_purchase_date or day <= g.latest_purchase_date,
         }
         for failed, passed in checks.items():
@@ -312,6 +327,13 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
     picked: list[Route] = []
     for rank in ("purchase_now", "mixed", "virtual_savings", "no_purchase", "virtual_investment"):
         group = [x for x in frontier if x.kind == rank and x not in picked]
+        if rank == "mixed" and g.investment_allowed:
+            # Keep a validated invested alternative available for comparison,
+            # even when lower-risk cash/savings dominates it on the Pareto frontier.
+            investment_alternatives = [x for x in valid if x.kind == "mixed"
+                                       and x.investment_amount > 0 and x not in picked]
+            if investment_alternatives:
+                group = investment_alternatives
         if group and len(picked) < req.max_results:
             picked.append(sorted(group, key=lambda x: (x.purchase_delay_days, -x.minimum_balance))[0])
     for extra in sorted(frontier, key=lambda x: (-x.minimum_balance, x.purchase_delay_days)):
@@ -324,6 +346,8 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         "essential_bills": "월세·카드대금 등 필수결제가 보호되지 않는 경로가 있어요.",
         "minimum_balance": "최저 잔액 조건을 만족할 수 없는 경로가 있어요.",
         "required_savings": "지정한 저축 금액을 유지하기 어려워요.",
+        "savings_execution": "선택한 저축 납입 금액이 시뮬레이션에 반영되지 않았어요.",
+        "investment_execution": "가상투자 예산으로는 주식·ETF를 1주도 매수할 수 없어요.",
         "purchase_deadline": "구매 기한이 현재 현금흐름과 충돌해요.",
         "purchase_requirement": "구매가 반드시 필요한 조건과 충돌해요.",
         "category_adjustment_engine_not_supported": "소비 카테고리 조정은 아직 검증 가능한 계산 이벤트가 없어 적용하지 않았어요.",

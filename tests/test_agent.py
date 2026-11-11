@@ -44,6 +44,46 @@ def test_search_uses_canonical_engine_and_never_recommends_invalid_path():
         assert all(e["user_id"] == "S01" for e in route["scenario"]["events"])
 
 
+def test_savings_and_investment_goal_uses_mixed_world_without_purchase(monkeypatch):
+    from app.services import agent_paths
+
+    original_compare = agent_paths.compare_worlds
+    captured = []
+
+    def traced_compare(ds, req):
+        if req.allocation and req.allocation.savings and req.allocation.investment:
+            captured.append(req)
+        return original_compare(ds, req)
+
+    monkeypatch.setattr(agent_paths, "compare_worlds", traced_compare)
+    req = SearchRequest(
+        conditions=GoalConditions(
+            user_id="S01", as_of=DAY, purchase_amount=0,
+            required_savings_amount=1000,
+            investment_allowed=True, maximum_investment_amount=2000,
+        ),
+        horizon_days=14, max_evaluations=6,
+    )
+    search_paths(load_dataset(), req)
+    assert len(captured) == 1
+    combo = captured[0]
+    assert combo.purchase_amount == 3000
+    assert combo.allocation.purchase == 0
+    assert combo.allocation.savings == 1000
+    assert combo.allocation.investment == 2000
+
+
+def test_agent_does_not_claim_buy_when_one_share_is_unaffordable():
+    response = client.post("/api/v4/agent/search", json=payload(
+        purchase_amount=0, required_savings_amount=1000,
+        investment_allowed=True, maximum_investment_amount=1,
+    ))
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["rejection_counts"].get("investment_execution", 0) >= 1
+    assert all(route["investment_amount"] == 0 for route in data["routes"])
+
+
 def test_hard_minimum_balance_is_never_silently_relaxed():
     r = client.post("/api/v4/agent/search",
                     json=payload(purchase_amount=10000, minimum_balance=100_000_000))
