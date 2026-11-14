@@ -11,6 +11,7 @@ from app.api.agent import router as agent_router
 from app.api.stage6 import router as stage6_router
 from app.api.ai import router as ai_router
 from app.core.settings import CORS_ORIGINS
+from app.core.gateway import gateway_guard
 
 app = FastAPI(
     title="평행통장 V4 · 금융 계산 API",
@@ -39,6 +40,8 @@ app = FastAPI(
     }, {"name": "v4-stage3-digital-twin", "description": "20명 공통 데이터 기반 홈·6경로 비교·저장·ML 입력"},
     ],
 )
+
+app.middleware("http")(gateway_guard)
 
 app.add_middleware(
     CORSMiddleware,
