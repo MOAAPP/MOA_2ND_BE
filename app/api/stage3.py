@@ -16,7 +16,12 @@ from app.services.observed_view import for_user_date
 from app.services.finance import FinanceProblem, calculate, state_for, kst
 from app.services.stage3 import compare_worlds
 from app.ml.forecast import run_forecast, to_events, ForecastProblem
-from app.stage3_models import WorldCompareRequest, WorldCompareResult
+from app.stage3_models import (
+    WorldCompareRequest, WorldCompareResult, SavingsPlanRequest, SavingsPlanResult,
+)
+from app.services.savings_plan import plan_savings
+from app.portfolio_models import PortfolioSimulationRequest, PortfolioSimulationResult
+from app.services.portfolio import simulate_portfolio
 
 router = APIRouter(prefix="/api/v4", tags=["v4-stage3-digital-twin"])
 DEMO_USER_ID = DEFAULT_DEMO_USER_ID
@@ -182,6 +187,31 @@ def compare(payload: WorldCompareRequest, ds: Dataset = Depends(dataset_dep)):
         return compare_worlds(ds, payload)
     except (FinanceProblem, ValueError) as exc:
         raise HTTPException(422, {"code": "scenario_invalid", "message": str(exc)}) from exc
+
+
+@router.post("/savings/plan", response_model=SavingsPlanResult,
+             summary="가상 적금 납입 일정·목표 달성·90일 현금흐름 검증")
+def savings_plan(payload: SavingsPlanRequest, ds: Dataset = Depends(dataset_dep)):
+    ds = _effective(ds, payload.user_id, payload.as_of)
+    _user(ds, payload.user_id)
+    try:
+        return plan_savings(ds, payload)
+    except (FinanceProblem, ValueError) as exc:
+        raise HTTPException(422, {"code": "savings_plan_invalid", "message": str(exc)}) from exc
+
+
+@router.post("/portfolio/simulate", response_model=PortfolioSimulationResult,
+             summary="다종목 가상 주식·ETF 매수·매도·평가손익 및 결제계좌 영향 계산")
+def portfolio_simulation(payload: PortfolioSimulationRequest,
+                         ds: Dataset = Depends(dataset_dep)):
+    ds = _effective(ds, payload.user_id, payload.as_of)
+    _user(ds, payload.user_id)
+    try:
+        return simulate_portfolio(ds, payload)
+    except (FinanceProblem, ValueError, ForecastProblem) as exc:
+        raise HTTPException(422, {"code": "portfolio_simulation_invalid",
+                                  "message": str(exc)}) from exc
+
 
 
 class ScenarioSaveRequest(BaseModel):
