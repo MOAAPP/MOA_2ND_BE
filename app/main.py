@@ -7,6 +7,7 @@ from app.api.finance import router
 from app.api.stage2 import router as sms_router, purchase_router
 from app.api.stage3 import router as stage3_router
 from app.api.ml import router as ml_router
+from app.api.forecast_chart import router as forecast_chart_router
 from app.api.agent import router as agent_router
 from app.api.stage6 import router as stage6_router
 from app.api.ai import router as ai_router
@@ -55,6 +56,7 @@ app.include_router(sms_router)
 app.include_router(purchase_router)
 app.include_router(stage3_router)
 app.include_router(ml_router)
+app.include_router(forecast_chart_router)
 app.include_router(agent_router)
 app.include_router(stage6_router)
 app.include_router(ai_router)

@@ -318,3 +318,79 @@ def test_swagger_root_and_openapi_discovery():
     assert '/api/v4/users/{user_id}/cashflow' in data['paths']
     assert '/api/v4/cashflow/simulate' in data['paths']
     assert data['paths']['/api/v4/cashflow/simulate']['post']['summary'] == '가상 구매·소득 변동 시나리오 비교'
+
+
+# ---- Step 1 regression: no double debit when payments are slightly early; month-end schedules ----
+def _salary_or_rent(day=10, direction='out', **kw):
+    return dict({'id': 'rent', 'account_id': 'TST-PAY', 'direction': direction, 'amount': 300000,
+                 'recurrence': 'monthly', 'day': day, 'kind': 'rent', 'name': '월세',
+                 'status': 'scheduled', 'essential': True}, **kw)
+
+
+def test_early_card_payment_not_double_debited_with_estimated_bill():
+    a = eod(date(2026, 11, 4)); end = eod(date(2026, 11, 20))
+    credit = txn('credit1', method='credit', amount=30000, debit=datetime(2026, 11, 14, 14, tzinfo=KST), card_id='TST-CR1')
+    pay = txn('payment', kind='card_payment', method='transfer', amount=30000,
+              when=datetime(2026, 11, 4, 9, tzinfo=KST), debit=datetime(2026, 11, 12, 9, tzinfo=KST), card_id='TST-CR1')
+    u = fixture_user([credit, pay]); known, _ = normalise_observed(u.transactions, a)
+    assert credit_bills(u, 'TST-PAY', known, a, end, []) == []
+    assert sum(e.amount for e in recorded_events(u, 'TST-PAY', known, a, end, [])) == -30000
+
+
+def test_card_payment_of_other_card_or_other_month_does_not_cancel_bill():
+    a = eod(date(2026, 11, 4)); end = eod(date(2026, 12, 20))
+    credit = txn('credit1', method='credit', amount=30000, debit=datetime(2026, 11, 14, 14, tzinfo=KST), card_id='TST-CR1')
+    other_card = txn('p1', kind='card_payment', method='transfer', amount=9000, when=datetime(2026, 11, 3, tzinfo=KST),
+                     debit=datetime(2026, 11, 14, 9, tzinfo=KST), card_id='TST-CR2')
+    last_month = txn('p2', kind='card_payment', method='transfer', amount=9000, when=datetime(2026, 10, 14, tzinfo=KST),
+                     debit=datetime(2026, 10, 14, 9, tzinfo=KST), card_id='TST-CR1')
+    u = fixture_user([credit, other_card, last_month]); known, _ = normalise_observed(u.transactions, a)
+    assert [b.amount for b in credit_bills(u, 'TST-PAY', known, a, end, [])] == [-30000]
+
+
+def test_schedule_paid_early_is_not_projected_again():
+    a = eod(date(2026, 11, 4)); end = eod(date(2026, 11, 20))
+    early = txn('rentpay', amount=300000, when=datetime(2026, 11, 3, 10, tzinfo=KST), schedule_id='rent', method='transfer')
+    u = fixture_user([early], [_salary_or_rent()]); known, _ = normalise_observed(u.transactions, a)
+    assert scheduled_events(u, 'TST-PAY', known, a, end, False, 0, []) == []
+    # without that payment the same schedule IS projected (input drives the result)
+    u2 = fixture_user([], [_salary_or_rent()])
+    assert [e.debit_at.date() for e in scheduled_events(u2, 'TST-PAY', [], a, end, False, 0, [])] == [date(2026, 11, 10)]
+
+
+@pytest.mark.parametrize('start,stop,expected', [
+    (date(2027, 1, 31), date(2027, 5, 1), ['2027-02-28', '2027-03-31', '2027-04-30']),
+    (date(2028, 1, 31), date(2028, 3, 5), ['2028-02-29']),
+])
+def test_month_end_schedule_clamps_to_last_day(start, stop, expected):
+    u = fixture_user([], [_salary_or_rent(day=31)])
+    got = scheduled_events(u, 'TST-PAY', [], eod(start), eod(stop), False, 0, [])
+    assert [e.debit_at.date().isoformat() for e in got] == expected
+
+
+def test_salary_delay_shifts_payday_and_can_cross_month_end():
+    sal = _salary_or_rent(day=31, direction='in', kind='salary', id='sal', name='급여', amount=1000000)
+    u = fixture_user([], [sal])
+    base = scheduled_events(u, 'TST-PAY', [], eod(date(2026, 10, 30)), eod(date(2026, 11, 20)), False, 0, [])
+    late = scheduled_events(u, 'TST-PAY', [], eod(date(2026, 10, 30)), eod(date(2026, 11, 20)), False, 5, [])
+    assert [e.debit_at.date() for e in base] == [date(2026, 10, 31)]
+    assert [e.debit_at.date() for e in late] == [date(2026, 11, 5)]
+
+
+def test_real_dataset_card_bill_and_balance_reconcile_with_daily_eod(dataset):
+    """Every observed EOD-to-EOD balance change equals the engine's cash effects (no double/missed debit)."""
+    from app.services.finance import _cash_effect, kst
+    snap = eod(date.fromisoformat(dataset.meta['snapshot_date']))
+    for uid in sorted(dataset.profiles):
+        u = dataset.get_user(uid); acct = u.profile['payment_account_id']
+        obs, _ = normalise_observed(u.transactions, snap)
+        by_day = defaultdict(int)
+        for t in obs:
+            eff = _cash_effect(t, acct, u)
+            if eff is not None:
+                by_day[kst(t.get('debit_at') or t['occurred_at']).date()] += eff
+        rows = sorted((r for r in u.daily if r.get('observation_complete') and r.get('account_balance_eod') is not None),
+                      key=lambda r: r['date'])
+        for p, n in zip(rows, rows[1:]):
+            if (date.fromisoformat(n['date']) - date.fromisoformat(p['date'])).days == 1:
+                assert n['account_balance_eod'] - p['account_balance_eod'] == by_day[date.fromisoformat(n['date'])], (uid, n['date'])
