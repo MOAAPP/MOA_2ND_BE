@@ -14,6 +14,7 @@ from app.services.dataset import Dataset
 from app.services.observed_view import for_user_date
 from app.services.agent_paths import GoalConditions, SearchRequest, SearchResult, search_paths
 from app.services.agent_llm import AgentFailure, run_agent
+from app.services.agent_savings import SavingsAdviceRequest, SavingsAdviceResult, recommend_savings
 from app.services.finance import FinanceProblem
 from app.ml.forecast import run_forecast
 
@@ -59,6 +60,20 @@ def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
         # Do not leak provider credentials or personal data in HTTP response.
         raise HTTPException(502, {"code": "llm_provider_error",
                                   "message": "AI 조건 분석에 실패했어요. 기존 여섯 평행세계는 계속 사용할 수 있어요."}) from exc
+
+
+@router.post("/savings/recommend", response_model=SavingsAdviceResult,
+             summary="목표 기반 적금 납입액·연기 대안 계산 및 현금흐름 검증 (LLM 불필요)")
+def savings_recommend(payload: SavingsAdviceRequest, ds: Dataset = Depends(dataset_dep)):
+    try:
+        ds = for_user_date(ds, payload.plan.user_id, payload.plan.as_of)
+        if payload.plan.user_id not in ds.profiles:
+            raise KeyError(payload.plan.user_id)
+        return recommend_savings(ds, payload)
+    except KeyError as exc:
+        raise HTTPException(404, {"code": "user_not_found"}) from exc
+    except (ValueError, FinanceProblem) as exc:
+        raise HTTPException(422, {"code": "savings_advice_invalid", "message": str(exc)}) from exc
 
 
 @router.post("/search", response_model=SearchResult, summary="LLM 없이 수정된 제약조건으로 Python 경로 재탐색")
