@@ -102,3 +102,15 @@ Swagger UI: `http://127.0.0.1:8000/docs`
 5. 프론트 담당자의 화면 개발 완료 후 FastAPI 시연 화면뿐 아니라 일반 앱에서 새 엔드포인트 연동 테스트 수행.
 
 > 현재 합성 사용자 데모 API는 금융 데이터 인증이 없는 실서비스 환경에서 사용하면 안 됩니다.
+
+
+## 자연어 Agent / 경로 탐색: 추천 불가 사유 안내
+
+`POST /api/v4/agent/analyze`은 기존 `search` 객체에, `POST /api/v4/agent/search`는 응답 최상위에 **`no_route_guidance`**를 추가로 반환합니다. 기존 `status`, `routes`, `rejection_counts` 계약은 변경하지 않습니다.
+
+- `status="ok"` 또는 `"needs_confirmation"`일 때 `no_route_guidance=null`.
+- `status="no_valid_route"`일 때 `no_route_guidance.reason`: `baseline_cashflow_at_risk`(아무것도 하지 않아도 마이너스 등), `minimum_balance_unmet`(사용자 최소잔액/필수결제 조건 미달), `scenario_constraints_unmet`(기본 현금흐름은 통과하나 요청한 조합 불가), `baseline_unavailable`(미구매 기준 계산 실패).
+- `no_route_guidance.baseline_no_purchase`: **동일한 Python/ML 예측 조건에서 계산한 미구매 경로**의 `horizon_days`, `forecast_source`, `available_cash`, `minimum_balance`, `ending_balance`, `required_minimum_balance`, `first_shortfall_date`, `minimum_balance_met`, `essential_payments_covered`. 조회 불가 시 `null`.
+- `no_route_guidance.summary`는 기존 `conflict_explanations[0]`에도 추가하므로 현재 프론트가 기존 오류 설명만 읽어도 근거를 확인할 수 있습니다.
+- `no_route_guidance.next_steps`는 **사용자가 확인할 선택지**일 뿐 실제 가계부 변경이나 검증된 비용 절감 결과가 아닙니다. `actions_are_validated=false` 및 `disclaimer`를 함께 표시하세요.
+- 프론트, ML, 공통 금융 계산 엔진은 변경하지 않았으며 실제 결제, 투자, 자동이체는 발생하지 않습니다.
