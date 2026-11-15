@@ -50,3 +50,25 @@ def test_provider_missing_key_explicitly_reported(monkeypatch):
     with pytest.raises(AiUnavailable) as result:
         structured_text("brief", {"user": "S01"})
     assert result.value.code == "ai_api_key_missing"
+
+
+def test_gateway_reports_allowlisted_error_without_raw_body(monkeypatch):
+    monkeypatch.setenv("MOA_AI_API_KEY", "secret")
+    failure = UpstreamFailure(403)
+    failure.body = {"error": {"code": "customer_verification_required", "message": "private key and URL"}}
+    with patch("openai.OpenAI") as cls:
+        cls.return_value.chat.completions.create.side_effect = failure
+        with pytest.raises(AiUnavailable) as result:
+            structured_text("private", {})
+    assert result.value.code == "provider_customer_verification_required"
+
+
+def test_gateway_error_type_can_identify_required_verification(monkeypatch):
+    monkeypatch.setenv("MOA_AI_API_KEY","secret")
+    failure=UpstreamFailure(403)
+    failure.body={"error":{"type":"customer_verification_required","message":"private"}}
+    with patch("openai.OpenAI") as cls:
+        cls.return_value.chat.completions.create.side_effect=failure
+        with pytest.raises(AiUnavailable) as result:
+            structured_text("private",{})
+    assert result.value.code=="provider_customer_verification_required"

@@ -4,7 +4,7 @@ import json
 import os
 import re
 from functools import lru_cache
-from app.services.ai_provider import AiUnavailable, configured, structured_text
+from app.services.ai_provider import AiUnavailable, configured, structured_text, provider_settings
 from app.services.stage6 import briefing
 
 _PROMPT = """너는 한국어로 개인 금융 흐름의 의미를 설명하는 친절한 서비스 안내 AI다.
@@ -20,6 +20,13 @@ _PROMPT = """너는 한국어로 개인 금융 흐름의 의미를 설명하는 
 
 @lru_cache(maxsize=256)
 def _explain(facts_json: str, model: str) -> str:
+    from app.services import state_store
+    import hashlib
+    cache_key = 'ai-cache/briefing-'+hashlib.sha256((model+facts_json).encode()).hexdigest()+'.json'
+    if os.getenv('MOA_AI_CACHE') == 'on':
+        cached = state_store.get(cache_key)
+        if cached.get('text'):
+            return cached['text']
     result, _ = structured_text(_PROMPT, json.loads(facts_json), model=model, max_tokens=160)
     text = result.get("explanation")
     if not isinstance(text, str) or not 10 <= len(text.strip()) <= 100:
@@ -27,6 +34,8 @@ def _explain(facts_json: str, model: str) -> str:
     # Financial numbers are only displayed by deterministic Python widgets.
     if re.search(r"[0-9０-９]|\d|[%₩$]", text):
         raise AiUnavailable("explanation_contains_unverified_number")
+    if os.getenv('MOA_AI_CACHE') == 'on':
+        state_store.put(cache_key, {'text':text.strip(),'model':model})
     return text.strip()
 
 def ai_briefing(ds, user_id, day, *, minimum_balance=0):
@@ -58,7 +67,7 @@ def ai_briefing(ds, user_id, day, *, minimum_balance=0):
         "has_saved_future_plan": data["saved_plans_count"] > 0,
         "future_expenses_are_predictions": True,
     }
-    model = os.getenv("MOA_BRIEFING_MODEL") or os.getenv("MOA_AI_MODEL") or "gpt-4.1-mini"
+    model = os.getenv("MOA_BRIEFING_MODEL") or provider_settings()[2]
     try:
         explanation = _explain(json.dumps(facts, sort_keys=True, ensure_ascii=False), model)
         # Append free-text rationale to the deterministic financial event summary.

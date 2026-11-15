@@ -10,17 +10,24 @@ import json
 import os
 import re
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from app.services.ai_provider import configured, structured_text, AiUnavailable
-from app.services.stage2_store import runtime_dir
+from app.services.ai_provider import configured, structured_text, AiUnavailable, provider_settings
+from app.services import state_store
 
 _LOCK = threading.RLock()
 TOPICS = ("cashflow", "credit", "saving", "investing", "forecast")
+TOPIC_GUIDES = {
+    "cashflow": "월 전체 합계보다 실제 입금일과 출금일의 순서를 살펴보세요.",
+    "credit": "카드를 쓴 날과 통장에서 돈이 빠져나가는 날을 구분해 보세요.",
+    "saving": "목표 금액뿐 아니라 저축한 뒤 필수 결제를 지킬 수 있는지도 생각해 보세요.",
+    "investing": "현재 평가액과 바로 쓸 수 있는 현금, 손실 가능성을 구분해 보세요.",
+    "forecast": "예측은 확정된 거래가 아니에요. 어떤 과거 자료로 검증했는지 살펴보세요.",
+}
 BANK = {
     "cashflow": [
         ("월세 출금일보다 알바비 입금일이 늦다면 먼저 무엇을 해야 할까요?",
@@ -77,51 +84,70 @@ class GeneratedQuiz(BaseModel):
             raise ValueError("quiz_choices_invalid")
         return values
 
-def _path(user_id: str, day: str) -> Path:
-    if not re.fullmatch(r"S[0-9]{2}", user_id) or not re.fullmatch(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}", day):
+def _learning_key(user_id: str):
+    if not re.fullmatch(r"S[0-9]{2}", user_id):
         raise ValueError("invalid_quiz_identity")
-    root = runtime_dir() / "learning"
-    root.mkdir(parents=True, exist_ok=True)
-    return root / f"{user_id}_{day}.json"
+    return f"learning/{user_id}.json"
 
-def _existing(user_id: str):
-    root = runtime_dir() / "learning"
-    if not root.exists():
-        return []
-    rows = []
-    for p in sorted(root.glob(user_id + "_*.json")):
-        try:
-            rows.append(json.loads(p.read_text(encoding="utf-8")))
-        except (ValueError, OSError):
-            pass
-    return rows[-90:]
 
-def _topic(user_id: str, day: str, old: list[dict]):
-    wrongs = [r["topic"] for r in old if r.get("answer_record", {}).get("correct") is False]
-    if wrongs:
-        # Prioritize the last wrong concept until a later correct answer
-        # on that topic supersedes it, without leaking other personas.
-        for row in reversed(old):
-            if row.get("topic") == wrongs[-1] and row.get("answer_record"):
-                if row["answer_record"].get("correct") is False:
-                    return wrongs[-1], "recent_wrong_answer"
-                break
-    idx = int(hashlib.sha256((user_id + day).encode()).hexdigest()[:8], 16) % len(TOPICS)
-    return TOPICS[idx], "date_persona_rotation"
+def _existing(user_id: str, *, through: str | None = None):
+    rows = list(state_store.get(_learning_key(user_id)).get("quizzes", {}).values())
+    return sorted((r for r in rows if through is None or r.get("date", "") <= through), key=lambda r:r["date"])[-90:]
+
+
+def get_interests(ds, user_id: str, day: date) -> list[str]:
+    if user_id not in ds.profiles:
+        raise KeyError(user_id)
+    history = state_store.get(_learning_key(user_id)).get("preferences", [])
+    eligible = [entry for entry in history if entry["effective_date"] <= day.isoformat()]
+    return eligible[-1]["topics"] if eligible else []
+
+
+def set_interests(ds, user_id: str, topics: list[str], day: date | None = None) -> dict:
+    if user_id not in ds.profiles:
+        raise KeyError(user_id)
+    if len(topics) != len(set(topics)) or any(t not in TOPICS for t in topics):
+        raise ValueError("invalid_interests")
+    today = (day or datetime.now(ZoneInfo("Asia/Seoul")).date()).isoformat()
+    def change(doc):
+        history = [entry for entry in doc.get("preferences", []) if entry["effective_date"] != today]
+        history.append({"effective_date": today, "topics": topics})
+        doc["preferences"] = sorted(history, key=lambda e:e["effective_date"])
+    state_store.mutate(_learning_key(user_id), change)
+    return {"user_id": user_id, "topics": topics, "effective_date": today}
+
+
+def _topic(user_id: str, day: str, old: list[dict], interests: list[str] | None = None):
+    # The latest answered attempt for each topic determines whether it still
+    # needs review. A corrected topic must not hide another unresolved topic.
+    seen = set()
+    for row in reversed(old):
+        topic = row.get("topic")
+        answer = row.get("answer_record")
+        if topic not in TOPICS or topic in seen or not answer:
+            continue
+        seen.add(topic)
+        if answer.get("correct") is False:
+            return topic, "recent_wrong_answer"
+    choices = interests or list(TOPICS)
+    idx = int(hashlib.sha256((user_id + day).encode()).hexdigest()[:8], 16) % len(choices)
+    return choices[idx], "user_interest" if interests else "date_persona_rotation"
 
 def _generate(ds, user_id: str, day: str):
     u = ds.get_user(user_id)
     observed_until = min(day, ds.meta["snapshot_date"])
-    old = [r for r in _existing(user_id) if r.get("date", "") < day]
-    topic, reason = _topic(user_id, day, old)
+    old = [r for r in _existing(user_id, through=day) if r.get("date", "") < day]
+    interests = get_interests(ds, user_id, date.fromisoformat(day))
+    topic, reason = _topic(user_id, day, old, interests)
     previous = [(r.get("topic"), r["answer_record"].get("correct")) for r in old[-7:] if r.get("answer_record")]
     source = "rule_based"
+    generation_status = "not_configured"
     model = None
     quiz = None
     if configured():
         facts = {
             "day": day, "topic": topic, "selection_reason": reason,
-            "recent_answers": previous,
+            "recent_answers": previous, "user_interests": interests,
             "user_is_synthetic": True, "financial_observation_end": observed_until,
             "latest_spending_categories": [
                 t.get("category", "unclassified") for t in
@@ -138,12 +164,13 @@ def _generate(ds, user_id: str, day: str):
 정답은 0~3, 선택지 4개는 모두 달라야 한다."""
         try:
             raw, model = structured_text(prompt, facts,
-                model=os.getenv("MOA_QUIZ_MODEL") or os.getenv("MOA_AI_MODEL") or "gpt-4.1-mini",
+                model=os.getenv("MOA_QUIZ_MODEL") or provider_settings()[2],
                 max_tokens=440)
             quiz = GeneratedQuiz.model_validate(raw)
             source = "llm"
-        except (AiUnavailable, ValueError):
-            pass
+            generation_status = "live"
+        except (AiUnavailable, ValueError) as exc:
+            generation_status = exc.code if isinstance(exc, AiUnavailable) else "invalid_quiz_output"
     if quiz is None:
         bank = BANK[topic]
         idx = int(hashlib.sha256((day + user_id).encode()).hexdigest()[-6:], 16) % len(bank)
@@ -152,6 +179,7 @@ def _generate(ds, user_id: str, day: str):
     item = {
         "id": uuid4().hex, "user_id": user_id, "date": day, "topic": topic,
         "selection_reason": reason, "source": source, "model": model if source == "llm" else None,
+        "generation_status": generation_status,
         **quiz.model_dump(), "answer_record": None,
     }
     return item
@@ -161,47 +189,122 @@ def _public(row: dict) -> dict:
     return {
         "id": row["id"], "user_id": row["user_id"], "date": row["date"],
         "topic": row["topic"], "selection_reason": row["selection_reason"],
+        "hint": TOPIC_GUIDES.get(row["topic"], "질문의 조건과 필수 결제를 함께 살펴보세요."),
         "source": row["source"], "model": row.get("model"),
+        "generation_status": row.get("generation_status", "live" if row["source"] == "llm" else "not_configured"),
         "question": row["question"], "options": row["options"],
         "answer_record": answered,
         "explanation": row["explanation"] if answered else None,
+        "answer_feedback": row.get("answer_feedback") if answered else None,
         "correct_answer": row["answer"] if answered else None,
     }
+
+def learning_history(ds, user_id: str, day: date) -> dict:
+    """Return answered learning history available at the requested date."""
+    if user_id not in ds.profiles:
+        raise KeyError(user_id)
+    if day < date.fromisoformat(ds.meta["start_date"]) or day > datetime.now(ZoneInfo("Asia/Seoul")).date():
+        raise ValueError("quiz_date_not_available")
+    rows = [r for r in _existing(user_id, through=day.isoformat()) if r.get("answer_record")]
+    items = [_public(r) for r in reversed(rows)]
+    correct_count = sum(r["answer_record"].get("correct") is True for r in rows)
+    return {"user_id": user_id, "as_of": day.isoformat(), "history_quiz_limit": 90,
+            "attempt_count": len(rows),
+            "correct_count": correct_count, "wrong_count": len(rows) - correct_count,
+            "items": items}
+
+
+def learning_overview(ds, user_id: str, day: date) -> dict:
+    """Explain progress from stored answers only; never generate a new quiz/AI call."""
+    history = learning_history(ds, user_id, day)
+    rows = list(reversed(history["items"]))
+    topics = []
+    for topic in TOPICS:
+        attempts = [row for row in rows if row["topic"] == topic]
+        latest = attempts[-1] if attempts else None
+        wrong = latest is not None and not latest["answer_record"]["correct"]
+        topics.append({"topic": topic, "attempt_count": len(attempts),
+                       "correct_count": sum(row["answer_record"]["correct"] for row in attempts),
+                       "needs_review": wrong,
+                       "next_review_date": (date.fromisoformat(latest["date"])+timedelta(days=1)).isoformat() if wrong else None,
+                       "guide": TOPIC_GUIDES[topic]})
+    days = {row["date"] for row in rows}
+    cursor = day if day.isoformat() in days else day-timedelta(days=1)
+    streak = 0
+    while cursor.isoformat() in days:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return {"user_id": user_id, "as_of": day.isoformat(), "source": "stored_answers",
+            "history_quiz_limit": 90, "streak_days": streak,
+            "attempt_count": history["attempt_count"], "correct_count": history["correct_count"],
+            "topics": topics, "review_topic_count": sum(topic["needs_review"] for topic in topics)}
 
 def quiz_for(ds, user_id: str, day: date) -> dict:
     if user_id not in ds.profiles:
         raise KeyError(user_id)
-    day_text = day.isoformat()
     if day < date.fromisoformat(ds.meta["start_date"]) or day > datetime.now(ZoneInfo("Asia/Seoul")).date():
         raise ValueError("quiz_date_not_available")
-    with _LOCK:
-        path = _path(user_id, day_text)
-        if path.exists():
-            row = json.loads(path.read_text(encoding="utf-8"))
-            if row.get("source") == "llm" or not configured() or row.get("answer_record"):
-                return _public(row)
-        row = _generate(ds, user_id, day_text)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
-        return _public(row)
+    key, day_text = _learning_key(user_id), day.isoformat()
+    existing = state_store.get(key).get("quizzes", {}).get(day_text)
+    if existing:
+        return _public(existing)
+    import time
+    owner = uuid4().hex
+    def claim(doc):
+        row = doc.get("quizzes", {}).get(day_text)
+        if row:
+            return row
+        locks = doc.setdefault("generations", {})
+        if locks.get(day_text, {}).get("until", 0) > time.time():
+            raise ValueError("quiz_generation_in_progress")
+        locks[day_text] = {"owner": owner, "until": time.time()+90}
+    already = state_store.mutate(key, claim)
+    if already:
+        return _public(already)
+    row = _generate(ds, user_id, day_text)
+    def save(doc):
+        lock = doc.get("generations", {}).get(day_text, {})
+        if lock.get("owner") != owner:
+            raise ValueError("quiz_generation_in_progress")
+        doc.setdefault("quizzes", {})[day_text] = row
+        doc["generations"].pop(day_text, None)
+        return row
+    return _public(state_store.mutate(key, save))
+
 
 def answer_quiz(ds, user_id: str, day: date, quiz_id: str, choice: int) -> dict:
     if user_id not in ds.profiles:
         raise KeyError(user_id)
-    with _LOCK:
-        path = _path(user_id, day.isoformat())
-        if not path.exists():
+    if not 0 <= choice <= 3:
+        raise ValueError("invalid_choice")
+    key = _learning_key(user_id)
+    def answer(doc):
+        row = doc.get("quizzes", {}).get(day.isoformat())
+        if not row:
             raise ValueError("quiz_not_issued")
-        row = json.loads(path.read_text(encoding="utf-8"))
-        if row["id"] != quiz_id or row["user_id"] != user_id:
+        if row["id"] != quiz_id:
             raise ValueError("quiz_identity_mismatch")
         if row.get("answer_record") is not None:
             raise ValueError("quiz_already_answered")
-        if not 0 <= choice <= 3:
-            raise ValueError("invalid_choice")
-        row["answer_record"] = {"choice": choice, "correct": choice == row["answer"]}
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
-        return _public(row)
+        row["answer_record"] = {"choice":choice,"correct":choice == row["answer"]}
+        row["answer_feedback"] = {"text":row["explanation"],"source":"quiz_explanation","model":None,"status":"not_configured"}
+        return dict(row)
+    row = state_store.mutate(key, answer)
+    feedback = row["answer_feedback"]
+    if configured():
+        facts = {"question":row["question"],"selected_option":row["options"][choice],
+                 "correct_option":row["options"][row["answer"]],"correct":row["answer_record"]["correct"],
+                 "reference_explanation":row["explanation"],"topic":row["topic"]}
+        try:
+            raw, model = structured_text("금융 퀴즈 해설. 제공된 정답과 기준 해설만 사용하고 선택이 맞거나 틀린 이유를 설명하라. 새로운 사실이나 투자 권유 금지. JSON {\"feedback\":\"한국어 해설\"}만 반환하라.", facts, max_tokens=220)
+            text = raw.get("feedback")
+            if not isinstance(text,str) or not 10 <= len(text.strip()) <= 350:
+                raise AiUnavailable("invalid_quiz_feedback")
+            feedback = {"text":text.strip(),"source":"llm","model":model,"status":"live"}
+        except (AiUnavailable, ValueError) as exc:
+            feedback["status"] = exc.code if isinstance(exc,AiUnavailable) else "invalid_quiz_feedback"
+    def save(doc):
+        current = doc["quizzes"][day.isoformat()]
+        current["answer_feedback"] = feedback
+        return current
+    return _public(state_store.mutate(key, save))

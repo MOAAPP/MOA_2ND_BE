@@ -15,6 +15,13 @@ def provider_settings(kind: str = "text") -> tuple[str, str, str]:
     prefix = "MOA_VISION" if kind == "vision" else "MOA_AGENT" if kind == "agent" else "MOA_AI"
     key = (os.getenv(prefix + "_API_KEY") or os.getenv("MOA_AI_API_KEY")
            or os.getenv("OPENAI_API_KEY") or "").strip()
+    if not key and os.getenv("MOA_AI_PROVIDER") == "vercel_gateway":
+        try:
+            from vercel.oidc import get_vercel_oidc_token_sync
+            key = os.getenv("AI_GATEWAY_API_KEY") or get_vercel_oidc_token_sync()
+        except Exception:
+            key = ""
+        return key, "https://ai-gateway.vercel.sh/v1", os.getenv("MOA_GATEWAY_MODEL", "openai/gpt-4.1-nano")
     base = (os.getenv(prefix + "_BASE_URL") or os.getenv("MOA_AI_BASE_URL")
             or "https://api.openai.com/v1").strip()
     model = (os.getenv(prefix + "_MODEL") or os.getenv("MOA_AI_MODEL")
@@ -31,7 +38,10 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         raise AiUnavailable("ai_api_key_missing")
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=key, base_url=base, timeout=18, max_retries=0)
+        headers = {}
+        if base.rstrip('/') == "https://ai-gateway.vercel.sh/v1":
+            headers["ai-gateway-auth-method"] = "oidc" if key.count('.') == 2 else "api-key"
+        client = OpenAI(api_key=key, base_url=base, timeout=18, max_retries=0, default_headers=headers)
         selected_model = model or default_model
         params = {
             "model": selected_model,
@@ -80,7 +90,13 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         # Report only the HTTP class or safe exception TYPE, never messages,
         # headers, endpoint URLs, request bodies or credentials.
         status = getattr(exc, "status_code", None)
-        if status in (401, 403):
+        body = getattr(exc, "body", None)
+        error = body.get("error", body) if isinstance(body, dict) else {}
+        upstream_code = (error.get("code") or error.get("type")) if isinstance(error, dict) else None
+        safe_codes = {"customer_verification_required", "invalid_api_key", "invalid_oidc_token", "insufficient_quota", "insufficient_credits", "insufficient_funds", "quota_for_entity_exceeded"}
+        if upstream_code in safe_codes:
+            code = "provider_" + upstream_code
+        elif status in (401, 403):
             code = "provider_auth_or_permission_failed"
         elif status == 404:
             code = "provider_model_or_endpoint_not_found"

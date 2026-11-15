@@ -2,6 +2,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse
+from app.services.state_store import StateConflict, StateUnavailable
 
 from app.api.finance import router
 from app.api.stage2 import router as sms_router, purchase_router
@@ -11,6 +13,7 @@ from app.api.forecast_chart import router as forecast_chart_router
 from app.api.agent import router as agent_router
 from app.api.stage6 import router as stage6_router
 from app.api.ai import router as ai_router
+from app.api.learning_delivery import router as delivery_router
 from app.core.settings import CORS_ORIGINS
 from app.core.gateway import gateway_guard
 
@@ -47,10 +50,28 @@ app.middleware("http")(gateway_guard)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type", "X-Device-Id"],
     allow_credentials=False,
 )
+
+@app.middleware('http')
+async def vercel_request_identity(request, call_next):
+    # Request-scoped identity for Blob/Gateway; never forward browser credentials.
+    from vercel.headers import set_headers
+    set_headers(dict(request.headers))
+    try:
+        return await call_next(request)
+    finally:
+        set_headers(None)
+
+@app.exception_handler(StateConflict)
+async def state_conflict(_request, _exc):
+    return JSONResponse(status_code=409, content={"detail":{"code":"state_busy_retry","message":"다른 요청을 처리 중이에요. 잠시 후 다시 시도해 주세요."}})
+
+@app.exception_handler(StateUnavailable)
+async def state_unavailable(_request, _exc):
+    return JSONResponse(status_code=503, content={"detail":{"code":"durable_storage_unavailable","message":"학습 저장소에 연결하지 못했어요. 저장되지 않은 결과를 성공으로 표시하지 않아요."}})
 app.include_router(router)
 app.include_router(sms_router)
 app.include_router(purchase_router)
@@ -60,6 +81,7 @@ app.include_router(forecast_chart_router)
 app.include_router(agent_router)
 app.include_router(stage6_router)
 app.include_router(ai_router)
+app.include_router(delivery_router)
 
 
 @app.get("/", include_in_schema=False)
