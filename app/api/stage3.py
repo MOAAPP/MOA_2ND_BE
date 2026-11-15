@@ -20,6 +20,8 @@ from app.stage3_models import (
     WorldCompareRequest, WorldCompareResult, SavingsPlanRequest, SavingsPlanResult,
 )
 from app.services.savings_plan import plan_savings
+from app.portfolio_models import PortfolioSimulationRequest, PortfolioSimulationResult
+from app.services.portfolio import simulate_portfolio
 
 router = APIRouter(prefix="/api/v4", tags=["v4-stage3-digital-twin"])
 DEMO_USER_ID = DEFAULT_DEMO_USER_ID
@@ -196,6 +198,20 @@ def savings_plan(payload: SavingsPlanRequest, ds: Dataset = Depends(dataset_dep)
         return plan_savings(ds, payload)
     except (FinanceProblem, ValueError) as exc:
         raise HTTPException(422, {"code": "savings_plan_invalid", "message": str(exc)}) from exc
+
+
+@router.post("/portfolio/simulate", response_model=PortfolioSimulationResult,
+             summary="다종목 가상 주식·ETF 매수·매도·평가손익 및 결제계좌 영향 계산")
+def portfolio_simulation(payload: PortfolioSimulationRequest,
+                         ds: Dataset = Depends(dataset_dep)):
+    ds = _effective(ds, payload.user_id, payload.as_of)
+    _user(ds, payload.user_id)
+    try:
+        return simulate_portfolio(ds, payload)
+    except (FinanceProblem, ValueError, ForecastProblem) as exc:
+        raise HTTPException(422, {"code": "portfolio_simulation_invalid",
+                                  "message": str(exc)}) from exc
+
 
 
 class ScenarioSaveRequest(BaseModel):
