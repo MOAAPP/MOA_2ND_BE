@@ -1,0 +1,32 @@
+name: Validate EC2 automatic deployment scripts
+on:
+  pull_request:
+    paths:
+      - 'scripts/auto-deploy-ec2.sh'
+      - 'scripts/install-ec2-auto-deploy.sh'
+      - 'scripts/prepare-ec2-gateway.sh'
+      - 'scripts/ci-approved-sha.py'
+      - 'scripts/check-local-gateway.py'
+      - '.github/workflows/check-auto-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: |
+          bash -n scripts/auto-deploy-ec2.sh
+          bash -n scripts/install-ec2-auto-deploy.sh
+          bash -n scripts/prepare-ec2-gateway.sh
+      - name: Validate Python syntax
+        run: |
+          python3 -m py_compile scripts/ci-approved-sha.py scripts/check-local-gateway.py
+      - name: Validate no secrets in tracked files
+        run: |
+          test ! -f .env.gateway
+          grep -q '.env.gateway' .gitignore

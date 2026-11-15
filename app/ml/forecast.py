@@ -23,7 +23,10 @@ FEATURES = (
     "recent_large", "observed_days", "credit_share", "food_share",
     "cafe_share", "transport_share", "shopping_share", "days_to_income",
 )
-VERSION = "lgbm-cashoutflow-v4.1"
+VERSION = "lgbm-cashoutflow-v5.0"
+MAX_MODEL_HORIZON = 14
+METHODS = ("overall", "recent7", "weekday", "lightgbm")
+_SCALED = ("recent3_mean", "recent7_mean", "recent14_mean", "weekday_mean", "trend", "recent_large")
 MIN_HISTORY = 7
 SEED = 20261105
 
@@ -152,11 +155,33 @@ def baseline_daily(ledger, origin, target, method):
     if not past: raise ForecastProblem("no_complete_observation")
     if method == "recent7":
         return _mean(_past(ledger,origin,7)) if any(x is not None for x in _past(ledger,origin,7)) else _mean(past[-7:])
+    if method == "overall":
+        return _mean(past)
     if method == "weekday":
         by_dow = [v["outflow"] for d,v in ledger.items() if d <= origin and
                   d.weekday() == target.weekday() and v["outflow"] is not None]
         return _mean(by_dow) if by_dow else _mean(past)
     raise ForecastProblem("unknown_baseline_method")
+
+
+def normalise_features(rows):
+    """Scale monetary features by each user's own mean so one model can learn across users.
+
+    Returns (scaled rows, per-row KRW scale). The model target is outflow / scale.
+    """
+    import numpy as np
+    x = np.asarray(rows, dtype=float).copy()
+    scale = np.maximum(x[:, FEATURES.index("user_mean")], 1000.0)
+    for name in _SCALED:
+        x[:, FEATURES.index(name)] /= scale
+    return x, scale
+
+
+def predict_lightgbm(model, u, ledger, origin: date, targets):
+    """Daily KRW forecasts (floats >= 0) for the given target dates, all bounded by origin."""
+    import numpy as np
+    x, scale = normalise_features([feature_row(u, ledger, origin, d) for d in targets])
+    return np.maximum(0.0, np.asarray(model.predict(x)) * scale)
 
 
 def _quality(ledger, as_of):
@@ -185,7 +210,7 @@ def load_artifact():
         raise ForecastProblem(f"model_artifact_invalid:{exc}") from exc
 
 
-def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None):
+def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None, model_override: str | None = None):
     if horizon < 1 or horizon > 90:
         raise ForecastProblem("invalid_horizon")
     u = ds.get_user(user_id)
@@ -197,31 +222,35 @@ def run_forecast(ds, user_id: str, as_of: date, horizon=14, artifact=None):
     meta,model=artifact if artifact is not None else load_artifact()
     if meta and meta.get("dataset_id") != ds.meta["dataset_id"]:
         raise ForecastProblem("artifact_dataset_id_mismatch")
-    selected=(meta or {}).get("selected_model","weekday")
-    if selected not in ("lightgbm","recent7","weekday"):
+    selected=model_override or (meta or {}).get("selected_model","weekday")
+    if selected not in METHODS:
         raise ForecastProblem("model_selection_unknown")
+    if selected=="lightgbm" and model_override and not model:
+        raise ForecastProblem("lightgbm_artifact_missing_run_python_-m_app.ml.train")
     if quality=="insufficient":
         selected="unavailable"
     if selected=="lightgbm" and not model:
         raise ForecastProblem("selected_model_artifact_missing")
-    if meta and selected!="unavailable" and _day(meta["training_data_cutoff"]) >= as_of:
+    if meta and selected=="lightgbm" and _day(meta["training_data_cutoff"]) >= as_of:
         # An evaluation-time test can legitimately use an earlier, fixed model.
         # Never use a model whose training labels extend beyond the prediction origin.
+        if model_override=="lightgbm":
+            raise ForecastProblem("lightgbm_trained_on_labels_after_as_of_use_later_as_of")
         selected="weekday"
         quality="limited"
     daily=[]
     if selected!="unavailable":
         for i in range(1,horizon+1):
             d=as_of+timedelta(days=i)
-            if selected=="lightgbm" and i<=14:
-                amount=float(model.predict([feature_row(u,ledger,as_of,d)])[0])
+            if selected=="lightgbm" and i<=MAX_MODEL_HORIZON:
+                amount=float(predict_lightgbm(model,u,ledger,as_of,[d])[0])
             else:
                 method=selected if selected!="lightgbm" else "weekday"
                 amount=baseline_daily(ledger,as_of,d,method)
             if not math.isfinite(amount):
                 raise ForecastProblem("model_prediction_non_finite")
             daily.append({"date":d.isoformat(),"amount":max(0,round(amount)),
-                          "method":selected if selected!="lightgbm" or i<=14 else "weekday_tail"})
+                          "method":selected if selected!="lightgbm" or i<=MAX_MODEL_HORIZON else "weekday_tail"})
     version=(meta or {}).get("version") if selected=="lightgbm" else f"baseline-{selected}-v1"
     run_id=hashlib.sha256(f"{ds.meta['dataset_id']}:{user_id}:{as_of}:{version}:{selected}:{horizon}".encode()).hexdigest()[:24]
     return {

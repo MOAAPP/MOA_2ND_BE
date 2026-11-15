@@ -28,7 +28,7 @@ jobs:
           import json
           d=json.load(open('/tmp/parallel-stage4-model/evaluation.json'))
           assert len(d['test_users'])==20
-          assert d['metadata']['selected_model'] in ('lightgbm','weekday','recent7')
+          assert d['metadata']['selected_model'] in ('lightgbm','overall','weekday','recent7')
           assert d['test']['lightgbm']['7']['cases']>0
           print('selected:',d['metadata']['selected_model'])
           print('validation 7-day:',{k:v['7']['mae'] for k,v in d['validation'].items()})

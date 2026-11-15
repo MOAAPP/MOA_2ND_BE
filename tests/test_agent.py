@@ -292,6 +292,6 @@ def test_all_eight_whitelisted_financial_tools_execute_against_canonical_dataset
         output = execute_tool(ds, name, params, uid, DAY)
         assert isinstance(output, dict) and output, name
         if name == "get_spending_forecast":
-            assert output["model_type"] in ("lightgbm", "recent7", "weekday", "unavailable")
+            assert output["model_type"] in ("lightgbm", "overall", "recent7", "weekday", "unavailable")
         if name == "compare_scenarios":
             assert len(output["paths"]) == 6

@@ -54,7 +54,15 @@ class Allocation(BaseModel):
 
 
 class WorldCompareRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"user_id": "S18", "as_of": "2026-11-04", "horizon_days": 30, "purchase_amount": 300000,
+         "payment_method": "debit", "savings_amount": 100000, "savings_monthly_amount": 50000,
+         "savings_annual_rate": 0.035, "investment_amount": 150000, "investment_return_percent": 6,
+         "investment_return_mode": "linear", "minimum_required_balance": 100000},
+        {"user_id": "S18", "horizon_days": 30, "purchase_amount": 200000, "savings_amount": 0,
+         "savings_monthly_amount": 50000, "savings_annual_rate": 0.04,
+         "allocation": {"purchase": 80000, "savings": 70000, "investment": 50000, "cash": 0}},
+    ]})
     user_id: str = Field(pattern=r"^S\d\d$")
     as_of: date | None = None
     horizon_days: int = Field(default=30, ge=14, le=90)
@@ -74,6 +82,9 @@ class WorldCompareRequest(BaseModel):
     investment_code: str | None = None
     investment_unit_price: int | None = Field(default=None, gt=0)
     investment_return_percent: float = Field(default=0, ge=-100, le=1000)
+    investment_return_mode: Literal["immediate", "linear"] = Field(
+        default="immediate",
+        description="immediate: 수익률 전체를 매수 다음 날부터 반영. linear: 매수일부터 조회기간 끝까지 일정하게 누적 반영.")
     virtual_sell_qty: int = Field(default=0, ge=0)
     virtual_sell_unit_price: int | None = Field(default=None, gt=0)
     virtual_sell_date: date | None = None
@@ -101,6 +112,7 @@ class ScenarioDay(BaseModel):
     closing_balance: int
     lowest_balance: int
     savings_balance: int
+    savings_interest: int = 0
     investment_value: int
     investment_profit_loss: int
 
@@ -118,6 +130,9 @@ class ScenarioPath(BaseModel):
     minimum_balance_met: bool
     essential_payments_covered: bool
     virtual_savings: int
+    virtual_savings_interest: int = 0
+    choice_cash_outflow: int = 0
+    balance_delta_vs_no_purchase: dict[str, int] = Field(default_factory=dict)
     virtual_investment_value: int
     virtual_investment_profit_loss: int
     virtual_investment_realized_profit_loss: int = 0
@@ -152,7 +167,6 @@ class SavedScenario(BaseModel):
     user_id: str
     request: WorldCompareRequest
     saved_at: datetime
-
 
 class SavingsPlanRequest(BaseModel):
     """Hypothetical recurring savings goal; never an actual bank transfer."""

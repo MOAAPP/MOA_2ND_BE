@@ -15,6 +15,13 @@ from app.schemas import CalculationRequest, CashEvent, DailyCashflow, FinancialR
 from app.services.dataset import Dataset, UserData
 
 KST = ZoneInfo('Asia/Seoul')
+# A real payment made slightly early/late still settles the same obligation (monthly cycles are >= 28 days apart).
+CARD_PAYMENT_MATCH_DAYS = 5
+SCHEDULE_PAYMENT_MATCH_DAYS = 7
+
+
+def _near(day: date, paid_days: set[date], tolerance: int) -> bool:
+    return any(abs((day - p).days) <= tolerance for p in paid_days)
 
 
 class FinanceProblem(ValueError):
@@ -133,8 +140,10 @@ def credit_bills(u: UserData, account: str, observed: list[dict], anchor: dateti
     if account != u.profile['payment_account_id']:
         return []
     bills = defaultdict(lambda: {'amount': 0, 'sources': [], 'due': None})
-    confirmed_payments = {(t.get('card_id'), kst(t.get('debit_at') or t['occurred_at']).date())
-                          for t in observed if t.get('kind') == 'card_payment'}
+    confirmed_payments = defaultdict(set)
+    for t in observed:
+        if t.get('kind') == 'card_payment':
+            confirmed_payments[t.get('card_id')].add(kst(t.get('debit_at') or t['occurred_at']).date())
     for t in observed:
         if t.get('method') != 'credit' or t.get('kind') != 'spend':
             continue
@@ -159,7 +168,7 @@ def credit_bills(u: UserData, account: str, observed: list[dict], anchor: dateti
             part = first_part + (remainder if i == installments - 1 else 0)
             date_due = next_month(first_due.date(), i)
             due = datetime.combine(date_due, first_due.timetz().replace(tzinfo=None), KST)
-            if not (anchor < due <= end) or (t.get('card_id'), date_due) in confirmed_payments:
+            if not (anchor < due <= end) or _near(date_due, confirmed_payments[t.get('card_id')], CARD_PAYMENT_MATCH_DAYS):
                 continue
             key = (t.get('card_id', 'unknown'), date_due)
             bills[key]['amount'] += part
@@ -174,8 +183,10 @@ def credit_bills(u: UserData, account: str, observed: list[dict], anchor: dateti
 def scheduled_events(u: UserData, account: str, observed: list[dict], anchor: datetime, end: datetime,
                      include_uncertain: bool, income_delay_days: int, existing_bills: list[CashEvent]) -> list[CashEvent]:
     events = []
-    paid_schedule_refs = {(t.get('schedule_id'), kst(t.get('debit_at') or t['occurred_at']).date())
-                          for t in observed if t.get('schedule_id')}
+    paid_schedule_days = defaultdict(set)
+    for t in observed:
+        if t.get('schedule_id'):
+            paid_schedule_days[t['schedule_id']].add(kst(t.get('debit_at') or t['occurred_at']).date())
     billed_dates = {e.debit_at.date() for e in existing_bills}
     start = anchor.date()
     for schedule in u.schedules:
@@ -197,7 +208,7 @@ def scheduled_events(u: UserData, account: str, observed: list[dict], anchor: da
         for scheduled_day in occurrences:
             if schedule.get('kind') in ('credit_card_bill', 'card_payment') and scheduled_day in billed_dates:
                 continue
-            if (schedule['id'], scheduled_day) in paid_schedule_refs:
+            if _near(scheduled_day, paid_schedule_days[schedule['id']], SCHEDULE_PAYMENT_MATCH_DAYS):
                 continue
             debit_day = scheduled_day + timedelta(days=income_delay_days if direction == 'in' else 0)
             due = midday(debit_day)

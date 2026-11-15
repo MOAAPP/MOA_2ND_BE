@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .env
 .env.local
+.env.gateway
 app/data/runtime/
 app/data/source/*
 !app/data/source/.gitkeep
