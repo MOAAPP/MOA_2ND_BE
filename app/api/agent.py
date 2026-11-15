@@ -14,6 +14,9 @@ from app.services.dataset import Dataset
 from app.services.observed_view import for_user_date
 from app.services.agent_paths import GoalConditions, SearchRequest, SearchResult, search_paths
 from app.services.agent_llm import AgentFailure, run_agent
+from app.services.agent_savings import SavingsAdviceRequest, SavingsAdviceResult, recommend_savings
+from app.goal_plan_models import IntegratedGoalRequest, IntegratedGoalResult
+from app.services.agent_goal_plan import integrated_goal_plan
 from app.services.finance import FinanceProblem
 from app.ml.forecast import run_forecast
 
@@ -26,6 +29,7 @@ class AnalyzeRequest(BaseModel):
     user_id: str = Field(pattern=r"^S\d\d$")
     as_of: date
     goal: str = Field(min_length=3, max_length=1200)
+    horizon_days: int = Field(default=30, ge=14, le=90, description="재무 검증 기간(일); 기존 기본값 30일")
     overrides: dict = Field(default_factory=dict)
     stress: str = Field(default="baseline", pattern="^(baseline|higher_spending|delayed_income|combined|investment_loss)$")
     max_evaluations: int = Field(default=72, ge=1, le=150)
@@ -49,7 +53,8 @@ def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
         raise HTTPException(404, {"code": "user_not_found", "user_id": payload.user_id})
     try:
         return run_agent(ds, payload.user_id, payload.as_of, payload.goal, payload.overrides,
-                         payload.stress, payload.max_evaluations, payload.investment_return_percent)
+                         payload.stress, payload.max_evaluations, payload.investment_return_percent,
+                         payload.horizon_days)
     except AgentFailure as exc:
         raise HTTPException(503, {"code": "llm_unavailable", "message": str(exc),
                                   "basic_parallel_worlds_unchanged": True}) from exc
@@ -59,6 +64,32 @@ def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
         # Do not leak provider credentials or personal data in HTTP response.
         raise HTTPException(502, {"code": "llm_provider_error",
                                   "message": "AI 조건 분석에 실패했어요. 기존 여섯 평행세계는 계속 사용할 수 있어요."}) from exc
+
+
+@router.post("/savings/recommend", response_model=SavingsAdviceResult,
+             summary="목표 기반 적금 납입액·연기 대안 계산 및 현금흐름 검증 (LLM 불필요)")
+def savings_recommend(payload: SavingsAdviceRequest, ds: Dataset = Depends(dataset_dep)):
+    try:
+        ds = for_user_date(ds, payload.plan.user_id, payload.plan.as_of)
+        if payload.plan.user_id not in ds.profiles:
+            raise KeyError(payload.plan.user_id)
+        return recommend_savings(ds, payload)
+    except KeyError as exc:
+        raise HTTPException(404, {"code": "user_not_found"}) from exc
+    except (ValueError, FinanceProblem) as exc:
+        raise HTTPException(422, {"code": "savings_advice_invalid", "message": str(exc)}) from exc
+
+
+@router.post("/goal-plan", response_model=IntegratedGoalResult,
+             summary="소비·가상 적금·다종목 투자 목표를 하나의 현금흐름으로 검증해 경로 추천")
+def goal_plan(payload: IntegratedGoalRequest, ds: Dataset = Depends(dataset_dep)):
+    try:
+        ds = for_user_date(ds, payload.user_id, payload.as_of or payload.savings_plan.as_of)
+        return integrated_goal_plan(ds, payload)
+    except KeyError as exc:
+        raise HTTPException(404, {"code": "user_not_found"}) from exc
+    except (ValueError, FinanceProblem) as exc:
+        raise HTTPException(422, {"code": "integrated_goal_invalid", "message": str(exc)}) from exc
 
 
 @router.post("/search", response_model=SearchResult, summary="LLM 없이 수정된 제약조건으로 Python 경로 재탐색")

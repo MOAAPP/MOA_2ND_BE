@@ -86,6 +86,34 @@ class Route(BaseModel):
     engine_request: WorldCompareRequest
 
 
+class NoPurchaseBaseline(BaseModel):
+    """Verified no-action benchmark from the same Stage 3 finance calculation."""
+    horizon_days: int
+    forecast_source: str | None
+    available_cash: int
+    minimum_balance: int
+    ending_balance: int
+    required_minimum_balance: int
+    first_shortfall_date: date | None
+    minimum_balance_met: bool
+    essential_payments_covered: bool
+
+
+class NoRouteGuidance(BaseModel):
+    """Risk explanation, never an unvalidated financial recommendation."""
+    reason: Literal[
+        "baseline_cashflow_at_risk",
+        "minimum_balance_unmet",
+        "scenario_constraints_unmet",
+        "baseline_unavailable",
+    ]
+    summary: str
+    baseline_no_purchase: NoPurchaseBaseline | None = None
+    next_steps: list[str]
+    actions_are_validated: bool = False
+    disclaimer: str = "다음 단계는 계산으로 안전성이 검증된 추천 경로가 아니며, 실제 조건 확인 후 재검증해야 합니다."
+
+
 class SearchResult(BaseModel):
     user_id: str
     as_of: date
@@ -100,6 +128,7 @@ class SearchResult(BaseModel):
     confirmations_required: list[str] = Field(default_factory=list)
     elapsed_ms: float
     fixed_baseline_valid_routes: int | None = None
+    no_route_guidance: NoRouteGuidance | None = None
     algorithm: str = "bounded_enumeration_pareto_v1"
 
 
@@ -132,6 +161,12 @@ def _dominates(a: Route, b: Route) -> bool:
 
 
 def _label(purchase: int, savings: int, invest: int, delay: int) -> str:
+    if purchase and savings and invest:
+        return "구매·저축·가상투자 병행" if not delay else "구매 시점 조정·저축·가상투자 병행"
+    if savings and invest:
+        return "저축·가상투자 병행"
+    if purchase and invest:
+        return "구매·가상투자 병행"
     if purchase and savings:
         return "구매와 저축 병행" if not delay else "구매 시점 조정·저축 병행"
     if purchase:
@@ -141,6 +176,67 @@ def _label(purchase: int, savings: int, invest: int, delay: int) -> str:
     if invest:
         return "가상투자 포함"
     return "가용 현금 유지"
+
+
+def _explain_no_route(baseline: ScenarioPath | None, g: GoalConditions,
+                      horizon_days: int, forecast_source: str | None) -> NoRouteGuidance:
+    """Explain verified no-purchase cash flow; never invent income, savings or relief."""
+    if baseline is None:
+        return NoRouteGuidance(
+            reason="baseline_unavailable",
+            summary="검증 가능한 추천 경로를 찾지 못했고, 미구매 기준 현금흐름도 확인하지 못했어요.",
+            next_steps=[
+                "입금일·필수 지출일과 입력한 목표 조건이 정확한지 확인해 주세요.",
+                "계산에 필요한 정보를 확인한 뒤 다시 시뮬레이션해 주세요.",
+            ],
+        )
+    required = g.minimum_balance or 0
+    ending = baseline.daily_cashflow[-1].closing_balance if baseline.daily_cashflow else baseline.available_cash
+    no_purchase = NoPurchaseBaseline(
+        horizon_days=horizon_days, forecast_source=forecast_source,
+        available_cash=baseline.available_cash, minimum_balance=baseline.minimum_balance,
+        ending_balance=ending, required_minimum_balance=required,
+        first_shortfall_date=baseline.first_shortfall_date,
+        minimum_balance_met=baseline.minimum_balance >= required,
+        essential_payments_covered=baseline.essential_payments_covered,
+    )
+    shortfall = (baseline.first_shortfall_date.isoformat() + "부터"
+                 if baseline.first_shortfall_date else "예측 기간 중")
+    if baseline.minimum_balance < 0:
+        reason = "baseline_cashflow_at_risk"
+        summary = (
+            f"구매·추가 저축·투자를 모두 하지 않아도 {shortfall} 계좌 잔액이 0원 미만이 될 것으로 예측돼요. "
+            f"{horizon_days}일간 예상 최저 잔액은 {baseline.minimum_balance:,}원, "
+            f"마지막 잔액은 {ending:,}원이에요. 구매를 포기하는 것만으로는 기본 현금흐름 문제가 해결되지 않아요."
+        )
+        steps = [
+            "월세·카드대금 등 예정된 필수결제와 입금 날짜가 맞는지 확인해 주세요.",
+            "실제로 조정할 수 있는 변동지출이 있는지 점검해 주세요. 절감 효과는 아직 검증되지 않았어요.",
+            "확인된 입출금 일정과 지출 가정으로 다시 계산하기 전에는 추가 저축·투자도 신중하게 결정해 주세요.",
+        ]
+    elif baseline.minimum_balance < required or not baseline.essential_payments_covered:
+        reason = "minimum_balance_unmet"
+        summary = (
+            f"아무것도 구매하지 않아도 {horizon_days}일 동안 요청한 최소 잔액 "
+            f"{required:,}원을 유지하거나 필수결제를 보호할 수 없어요. "
+            f"미구매 기준 예상 최저 잔액은 {baseline.minimum_balance:,}원이에요."
+        )
+        steps = [
+            "반드시 지킬 최소 잔액과 필수결제 조건이 맞는지 확인해 주세요.",
+            "고정 지출과 입금 날짜를 점검하고, 변경할 조건은 직접 확정한 뒤 다시 계산해 주세요.",
+        ]
+    else:
+        reason = "scenario_constraints_unmet"
+        summary = (
+            f"구매하지 않는 기준 현금흐름은 {horizon_days}일 동안 잔액·필수결제 조건을 통과하지만, "
+            "요청한 구매·저축·투자 조건을 모두 만족하는 검증된 경로는 없어요."
+        )
+        steps = [
+            "반드시 필요한 구매·저축 조건과 변경 가능한 날짜·금액을 구분해 확인해 주세요.",
+            "원하는 조건을 수정할 경우, 수정된 조건으로 경로를 다시 검증해 주세요.",
+        ]
+    return NoRouteGuidance(reason=reason, summary=summary,
+                           baseline_no_purchase=no_purchase, next_steps=steps)
 
 
 def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
@@ -203,7 +299,11 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
     savings_options = [savings_min] if savings_min else [0, max(0, price // 4)]
     investments = [0]
     if g.investment_allowed and g.maximum_investment_amount:
-        investments.append(min(g.maximum_investment_amount, max(1, price // 4)))
+        # Without a purchase goal, do not derive an invented 1 KRW investment.
+        # The cap is explicitly supplied by the user.
+        proposed_investment = min(g.maximum_investment_amount, price // 4) if price else g.maximum_investment_amount
+        if proposed_investment:
+            investments.append(proposed_investment)
     reductions = [0]
     # "adjustable" category must be explicitly provided; no assumptions about editable spending.
     if g.adjustable_expense_categories and g.maximum_spending_reduction:
@@ -224,6 +324,7 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
     seen: set[str] = set()
     evaluated = 0
     origin = None
+    baseline_no_purchase: ScenarioPath | None = None
     for purchase, day, method, savings, invest, reduction in choices:
         if evaluated >= req.max_evaluations:
             failures["search_budget_reached"] += 1
@@ -237,7 +338,8 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         if method == "credit" and g.credit_debit_date and g.credit_debit_date < base_day:
             failures["credit_settlement_before_purchase"] += 1
             continue
-        if purchase and (savings or invest):
+        if (purchase and (savings or invest)) or (savings and invest):
+            # Both savings and investment require the mixed ledger even without a purchase.
             kind = "mixed"
             allocation = Allocation(purchase=purchase, savings=savings, investment=invest, cash=0)
         elif purchase:
@@ -272,6 +374,10 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         try:
             result = compare_worlds(ds, payload)
             origin = result.baseline_source
+            if baseline_no_purchase is None:
+                baseline_no_purchase = next((p for p in result.paths
+                                             if p.scenario_id == "no_purchase"
+                                             and p.status == "calculated"), None)
         except (FinanceProblem, ValueError, KeyError) as exc:
             failures["financial_engine_error:" + str(exc)[:100]] += 1
             continue
@@ -279,12 +385,16 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         if path is None or path.status != "calculated":
             failures["unconfirmed_or_invalid_financial_path"] += 1
             continue
+        # A budget below one full share is NOT an executed investment.
+        invested_cash = sum(e.amount for e in path.events if e.event_type == "virtual_investment_buy")
         checks = {
             "essential_bills": path.essential_payments_covered,
             "minimum_balance": path.minimum_balance >= (g.minimum_balance or 0),
             "purchase_requirement": not g.purchase_required or bool(path.purchase_completed),
             "required_savings": path.virtual_savings >= savings_min,
+            "savings_execution": path.virtual_savings >= savings,
             "investment_permission": g.investment_allowed or invest == 0,
+            "investment_execution": invest == 0 or invested_cash > 0,
             "purchase_deadline": not day or not g.latest_purchase_date or day <= g.latest_purchase_date,
         }
         for failed, passed in checks.items():
@@ -312,6 +422,13 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
     picked: list[Route] = []
     for rank in ("purchase_now", "mixed", "virtual_savings", "no_purchase", "virtual_investment"):
         group = [x for x in frontier if x.kind == rank and x not in picked]
+        if rank == "mixed" and g.investment_allowed:
+            # Keep a validated invested alternative available for comparison,
+            # even when lower-risk cash/savings dominates it on the Pareto frontier.
+            investment_alternatives = [x for x in valid if x.kind == "mixed"
+                                       and x.investment_amount > 0 and x not in picked]
+            if investment_alternatives:
+                group = investment_alternatives
         if group and len(picked) < req.max_results:
             picked.append(sorted(group, key=lambda x: (x.purchase_delay_days, -x.minimum_balance))[0])
     for extra in sorted(frontier, key=lambda x: (-x.minimum_balance, x.purchase_delay_days)):
@@ -324,6 +441,8 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         "essential_bills": "월세·카드대금 등 필수결제가 보호되지 않는 경로가 있어요.",
         "minimum_balance": "최저 잔액 조건을 만족할 수 없는 경로가 있어요.",
         "required_savings": "지정한 저축 금액을 유지하기 어려워요.",
+        "savings_execution": "선택한 저축 납입 금액이 시뮬레이션에 반영되지 않았어요.",
+        "investment_execution": "가상투자 예산으로는 주식·ETF를 1주도 매수할 수 없어요.",
         "purchase_deadline": "구매 기한이 현재 현금흐름과 충돌해요.",
         "purchase_requirement": "구매가 반드시 필요한 조건과 충돌해요.",
         "category_adjustment_engine_not_supported": "소비 카테고리 조정은 아직 검증 가능한 계산 이벤트가 없어 적용하지 않았어요.",
@@ -332,10 +451,15 @@ def search_paths(ds: Dataset, req: SearchRequest) -> SearchResult:
         messages.append(descriptions.get(reason, "계산 엔진 검증에서 제외된 경로가 있어요. (" + reason + ")"))
     if not valid and not messages:
         messages = ["지정된 예산·결제일·저축 조건을 동시에 충족하는 경로를 발견하지 못했어요. 필수 조건은 임의로 완화하지 않았어요."]
+    guidance = (_explain_no_route(baseline_no_purchase, g, req.horizon_days, origin)
+                if not picked else None)
+    if guidance:
+        messages.insert(0, guidance.summary)
     return SearchResult(
         user_id=g.user_id, as_of=g.as_of, dataset_id=ds.meta["dataset_id"],
         forecast_source=origin, status="ok" if picked else "no_valid_route",
         routes=picked, evaluated_count=evaluated, valid_count=len(valid),
         rejection_counts=dict(failures), conflict_explanations=messages if not picked else [],
+        no_route_guidance=guidance,
         elapsed_ms=round((perf_counter()-started)*1000, 2),
     )

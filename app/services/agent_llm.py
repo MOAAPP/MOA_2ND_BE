@@ -56,7 +56,7 @@ TOOL_SPEC = [
         "user_id": {"type": "string"}, "as_of": {"type": "string"}}),
     ("get_purchase_candidate", "Get the latest observed screenshot candidate and confirmed price.", {
         "user_id": {"type": "string"}, "as_of": {"type": "string"}}),
-    ("simulate_cashflow", "Run canonical Python cashflow engine over 14 days.", {
+    ("simulate_cashflow", "Run canonical Python cashflow engine for the selected horizon.", {
         "user_id": {"type": "string"}, "as_of": {"type": "string"}}),
     ("simulate_savings", "Run the existing six-world calculator and return Python savings-world results.", {
         "user_id": {"type": "string"}, "as_of": {"type": "string"}, "amount": {"type": "integer"}}),
@@ -177,7 +177,8 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
     return conditions, _usage(response)
 
 
-def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date) -> dict:
+def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date,
+                 horizon_days: int = 30) -> dict:
     if name not in TOOL_NAMES:
         raise AgentFailure("tool_not_allowed")
     spec = next(fields for tool_name, _, fields in TOOL_SPEC if tool_name == name)
@@ -196,20 +197,20 @@ def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date) -
         s = state_for(ds, CalculationRequest(user_id=uid, as_of=as_of))
         return {"account_id": s.account_id, "available_cash": s.available_cash}
     if name == "get_spending_forecast":
-        f = run_forecast(ds, uid, as_of, 14)
+        f = run_forecast(ds, uid, as_of, horizon_days)
         return {"model_type": f["model_type"], "data_quality_status": f["data_quality_status"],
                 "forecast_run_id": f.get("forecast_run_id"), "forecasts": f.get("forecasts", [])}
     if name == "get_purchase_candidate":
         candidate, amount = resolve_candidate(ds, GoalConditions(user_id=uid, as_of=as_of))
         return {"candidate_id": (candidate or {}).get("id"), "purchase_amount": amount}
     if name == "simulate_cashflow":
-        r = calculate(ds, CalculationRequest(user_id=uid, as_of=as_of, horizon_days=14))
+        r = calculate(ds, CalculationRequest(user_id=uid, as_of=as_of, horizon_days=horizon_days))
         return {"available_cash": r.available_cash, "minimum_balance": r.minimum_balance,
                 "essential_payments_covered": r.essential_payments_covered}
     amount = check_amount("amount" if name in ("simulate_savings", "simulate_investment") else "purchase_amount")
     minimum = check_amount("minimum_balance") if name == "validate_constraints" else 0
     r = compare_worlds(ds, WorldCompareRequest(
-        user_id=uid, as_of=as_of, horizon_days=30,
+        user_id=uid, as_of=as_of, horizon_days=horizon_days,
         purchase_amount=amount, savings_amount=amount, investment_amount=amount,
         minimum_required_balance=minimum,
     ))
@@ -230,8 +231,11 @@ def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date) -
 
 def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | None = None,
               stress: str = "baseline", max_evaluations: int = 72,
-              investment_return_percent: int = 0) -> dict:
+              investment_return_percent: int = 0,
+              horizon_days: int = 30) -> dict:
     started = perf_counter()
+    if not 14 <= horizon_days <= 90:
+        raise ValueError("horizon_days_out_of_range_14_90")
     if uid not in ds.profiles:
         raise KeyError(uid)
     client = _client()
@@ -253,6 +257,7 @@ def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | N
         )},
         {"role": "user", "content": json.dumps({
             "user_id": uid, "as_of": as_of.isoformat(), "goal": goal[:900],
+            "horizon_days": horizon_days,
             "conditions": conditions.model_dump(mode="json"),
         }, ensure_ascii=False)},
     ]
@@ -283,7 +288,7 @@ def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | N
                     if key in duplicate_guard:
                         raise AgentFailure("duplicate_tool_call")
                     duplicate_guard.add(key)
-                    output = execute_tool(ds, name, data, uid, as_of)
+                    output = execute_tool(ds, name, data, uid, as_of, horizon_days=horizon_days)
                     audit.append({"tool": name, "status": "ok", "arguments": data})
                 except Exception as exc:
                     audit.append({"tool": name, "status": "error", "error": str(exc)[:120]})
@@ -293,7 +298,8 @@ def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | N
     except Exception as exc:
         # The validated Python optimizer is independent of planning tool availability.
         audit.append({"tool": "llm_tool_planning", "status": "error", "error": str(exc)[:120]})
-    result = search_paths(ds, SearchRequest(conditions=conditions, stress=stress,
+    result = search_paths(ds, SearchRequest(conditions=conditions, horizon_days=horizon_days,
+                                           stress=stress,
                                            max_evaluations=max_evaluations,
                                            investment_return_percent=investment_return_percent))
     inp = float(os.getenv("MOA_AGENT_INPUT_USD_PER_M", "0"))

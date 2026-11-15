@@ -95,6 +95,30 @@ def test_mixed_allocation_and_over_budget_rejected():
     assert over.status_code == 422
 
 
+def test_savings_and_investment_without_purchase_are_both_applied_to_mixed():
+    result = get_result(
+        purchase_amount=9000,
+        allocation={"purchase": 0, "savings": 3000, "investment": 5000, "cash": 1000},
+        investment_unit_price=1000, investment_return_percent=-20,
+        stress="investment_loss",
+    )
+    p = paths(result)
+    mixed = p["mixed"]
+    assert mixed["status"] == "calculated"
+    assert mixed["purchase_completed"] is False
+    assert mixed["virtual_savings"] == 3000
+    assert mixed["investment_quantity"] == 5
+    assert mixed["virtual_investment_value"] == 4000
+    assert mixed["virtual_investment_profit_loss"] == -1000
+    assert {e["event_type"] for e in mixed["events"]} == {
+        "savings_deposit", "virtual_investment_buy",
+    }
+    # An asset loss does not create another payment-account withdrawal.
+    assert mixed["future_balances"]["14"] == p["no_purchase"]["future_balances"]["14"] - 8000
+    assert mixed["daily_cashflow"][-1]["savings_balance"] == 3000
+    assert mixed["daily_cashflow"][-1]["investment_value"] == 4000
+
+
 def test_credit_purchase_without_settlement_date_not_faked():
     p = paths(get_result(payment_method="credit"))
     assert p["purchase_now"]["status"] == "needs_confirmation"
