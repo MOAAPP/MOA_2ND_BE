@@ -29,6 +29,7 @@ class AnalyzeRequest(BaseModel):
     user_id: str = Field(pattern=r"^S\d\d$")
     as_of: date
     goal: str = Field(min_length=3, max_length=1200)
+    horizon_days: int = Field(default=30, ge=14, le=90, description="재무 검증 기간(일); 기존 기본값 30일")
     overrides: dict = Field(default_factory=dict)
     stress: str = Field(default="baseline", pattern="^(baseline|higher_spending|delayed_income|combined|investment_loss)$")
     max_evaluations: int = Field(default=72, ge=1, le=150)
@@ -52,7 +53,8 @@ def analyze(payload: AnalyzeRequest, ds: Dataset = Depends(dataset_dep)):
         raise HTTPException(404, {"code": "user_not_found", "user_id": payload.user_id})
     try:
         return run_agent(ds, payload.user_id, payload.as_of, payload.goal, payload.overrides,
-                         payload.stress, payload.max_evaluations, payload.investment_return_percent)
+                         payload.stress, payload.max_evaluations, payload.investment_return_percent,
+                         payload.horizon_days)
     except AgentFailure as exc:
         raise HTTPException(503, {"code": "llm_unavailable", "message": str(exc),
                                   "basic_parallel_worlds_unchanged": True}) from exc

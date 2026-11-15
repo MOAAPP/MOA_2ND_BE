@@ -114,3 +114,13 @@ Swagger UI: `http://127.0.0.1:8000/docs`
 - `no_route_guidance.summary`는 기존 `conflict_explanations[0]`에도 추가하므로 현재 프론트가 기존 오류 설명만 읽어도 근거를 확인할 수 있습니다.
 - `no_route_guidance.next_steps`는 **사용자가 확인할 선택지**일 뿐 실제 가계부 변경이나 검증된 비용 절감 결과가 아닙니다. `actions_are_validated=false` 및 `disclaimer`를 함께 표시하세요.
 - 프론트, ML, 공통 금융 계산 엔진은 변경하지 않았으며 실제 결제, 투자, 자동이체는 발생하지 않습니다.
+
+
+## 자연어 Agent: 실제 경로를 위한 검증 기간 선택
+
+`POST /api/v4/agent/analyze`는 선택적 `horizon_days` (14~90일, 기본 30일)를 지원합니다. 모델의 금융 도구와 Python 경로 검증 모두 이 기간을 사용합니다.
+
+- S06 / `2026-11-04` / 구매 희망 1000원, 필수 구매 아님 / `horizon_days=14`: 양성 경로 사례 `status="ok"` 및 `search.routes`가 반환되는지 검증
+- 같은 조건에 기간 생략(기본 30일): `status="no_valid_route"`, `search.no_route_guidance` 유지
+- 자동화는 **LLM 응답만 모의(mock)로 제공**하고 실제 합성 데이터와 Python 계산은 사용합니다. 실제 학교 FactChat 호출은 로컬 키로 별도 Swagger 확인 필요
+- 14일 경로의 유효성은 30일 안전을 의미하지 않으며 기간 선택 조건을 화면에 명시해야 합니다.
