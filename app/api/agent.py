@@ -15,6 +15,8 @@ from app.services.observed_view import for_user_date
 from app.services.agent_paths import GoalConditions, SearchRequest, SearchResult, search_paths
 from app.services.agent_llm import AgentFailure, run_agent
 from app.services.agent_savings import SavingsAdviceRequest, SavingsAdviceResult, recommend_savings
+from app.goal_plan_models import IntegratedGoalRequest, IntegratedGoalResult
+from app.services.agent_goal_plan import integrated_goal_plan
 from app.services.finance import FinanceProblem
 from app.ml.forecast import run_forecast
 
@@ -74,6 +76,18 @@ def savings_recommend(payload: SavingsAdviceRequest, ds: Dataset = Depends(datas
         raise HTTPException(404, {"code": "user_not_found"}) from exc
     except (ValueError, FinanceProblem) as exc:
         raise HTTPException(422, {"code": "savings_advice_invalid", "message": str(exc)}) from exc
+
+
+@router.post("/goal-plan", response_model=IntegratedGoalResult,
+             summary="소비·가상 적금·다종목 투자 목표를 하나의 현금흐름으로 검증해 경로 추천")
+def goal_plan(payload: IntegratedGoalRequest, ds: Dataset = Depends(dataset_dep)):
+    try:
+        ds = for_user_date(ds, payload.user_id, payload.as_of or payload.savings_plan.as_of)
+        return integrated_goal_plan(ds, payload)
+    except KeyError as exc:
+        raise HTTPException(404, {"code": "user_not_found"}) from exc
+    except (ValueError, FinanceProblem) as exc:
+        raise HTTPException(422, {"code": "integrated_goal_invalid", "message": str(exc)}) from exc
 
 
 @router.post("/search", response_model=SearchResult, summary="LLM 없이 수정된 제약조건으로 Python 경로 재탐색")
