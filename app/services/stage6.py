@@ -179,7 +179,12 @@ def _atomic(target: Path, value: dict):
         try:
             # Atomic first-writer-wins: concurrent reads/saves must never replace
             # the original analysis snapshot for this user and observation day.
-            os.link(temp, target)
+            if os.name == "nt":
+                # Windows rename is atomic and refuses an existing destination.
+                # It also works where sandbox permissions forbid hard links.
+                os.rename(temp, target)
+            else:
+                os.link(temp, target)
         except FileExistsError:
             pass
     finally:

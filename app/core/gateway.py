@@ -21,6 +21,10 @@ PUBLIC = {"/api/v4/health"}
 
 
 def _is_paid_candidate(path: str, method: str) -> bool:
+    if path == "/api/v4/learning/card-explanation" and method == "POST":
+        return True
+    if path.endswith("/daily-quiz/answer") and method == "POST":
+        return True
     if path == "/api/v4/agent/analyze" and method == "POST":
         return True
     if path == "/api/v4/vision/analyze" and method == "POST":
