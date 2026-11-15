@@ -187,14 +187,19 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
         if save_amount:
             events.append(_event(sid, u.user_id, "savings_deposit", saved_day, save_amount,
                                  account, name="가상 저축 입금"))
-        if save_amount and req.savings_monthly_amount:
-            for month in range(1, 5):
+        # Recurring deposits are independent of the lump sum (monthly-only savings is valid).
+        if req.savings_monthly_amount and (sid == "virtual_savings" or (sid == "mixed" and mixed.savings)):
+            for month in range(1, 13):
                 installment_day = _add_month(saved_day, month)
                 if installment_day > horizon_end:
                     break
                 events.append(_event(sid, u.user_id, "savings_deposit",
                                      installment_day, req.savings_monthly_amount,
                                      account, name="정기 가상 저축", installment=month))
+        if sid == "virtual_savings" and not save_amount and req.savings_monthly_amount:
+            first = _add_month(saved_day, 0)
+            events.append(_event(sid, u.user_id, "savings_deposit", first, req.savings_monthly_amount,
+                                 account, name="정기 가상 저축", installment=0))
         if investment_budget and not unit_price:
             needs_confirmation = True
             notes.append("investment_reference_price_missing")
@@ -276,8 +281,13 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
         invested_value = 0
         realized_gain = 0
         goal_date = None
+        interest_float = 0.0
+        buy_day = None
         for item in result.daily_cashflow:
             current_day = item.date
+            if req.savings_annual_rate and cash_savings > 0:
+                # Simple daily interest on principal deposited before today (product terms unknown).
+                interest_float += cash_savings * req.savings_annual_rate / 365
             for ev in balance_events[current_day] if not (needs_confirmation or invalid) else []:
                 if ev.event_type in ("savings_deposit", "savings_adjustment"):
                     direction = -1 if ev.metadata.get("direction") == "withdraw" else 1
@@ -291,6 +301,7 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
                         raise FinanceProblem("investment_buy_value_mismatch")
                     held_qty += q
                     cost += ev.amount
+                    buy_day = buy_day or current_day
                 elif ev.event_type == "virtual_investment_sell":
                     q = int(ev.metadata.get("qty", 0))
                     if q <= 0 or q > held_qty:
@@ -305,20 +316,24 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
                 elif ev.event_type == "virtual_asset_revaluation":
                     valuation_override = int(ev.metadata.get("unit_price", unit_price or 0))
             price_today = valuation_override or unit_price or 0
+            ramp = 1.0
+            if req.investment_return_mode == "linear" and buy_day is not None:
+                span = max(1, (horizon_end - buy_day).days)
+                ramp = min(1.0, max(0, (current_day - buy_day).days) / span)
             if req.stress == "investment_loss":
                 # Applied only when explicitly specified; 0% remains unchanged.
-                price_today = max(0, round(price_today * (1 + min(0, req.investment_return_percent) / 100)))
+                price_today = max(0, round(price_today * (1 + min(0, req.investment_return_percent) / 100 * ramp)))
             elif req.investment_return_percent:
-                price_today = max(0, round(price_today * (1 + req.investment_return_percent / 100)))
+                price_today = max(0, round(price_today * (1 + req.investment_return_percent / 100 * ramp)))
             invested_value = held_qty * price_today
             if req.savings_goal_target is not None and goal_date is None and (
-                req.savings_goal_current + cash_savings >= req.savings_goal_target):
+                req.savings_goal_current + cash_savings + round(interest_float) >= req.savings_goal_target):
                 goal_date = current_day
             days.append(ScenarioDay(
                 date=current_day, opening_balance=item.opening_balance, inflow=item.inflow,
                 outflow=item.outflow, closing_balance=item.closing_balance,
                 lowest_balance=item.lowest_balance, savings_balance=cash_savings,
-                investment_value=invested_value, investment_profit_loss=invested_value-cost+realized_gain))
+                savings_interest=round(interest_float), investment_value=invested_value, investment_profit_loss=invested_value-cost+realized_gain))
         if req.savings_goal_target is not None and req.savings_goal_current >= req.savings_goal_target:
             goal_date = day
         balances = {key: value for key, value in result.future_balances.items()}
@@ -329,15 +344,17 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
             notes.append(mixed_problem or "invalid_allocation")
         if needs_confirmation:
             notes.append("no_scenario_debit_applied_until_required_fields_confirmed")
-        if req.savings_annual_rate is not None:
-            notes.append("interest_not_accrued_before_defined_product_compounding_terms")
+        if req.savings_annual_rate:
+            notes.append("simple_daily_interest_on_principal_assumption_not_product_terms")
         worlds.append(ScenarioPath(
             scenario_id=sid, label=LABELS[sid], status=status, events=events,
             available_cash=result.available_cash, future_balances=balances,
             daily_cashflow=days, minimum_balance=minimum,
             first_shortfall_date=short, minimum_balance_met=minimum >= req.minimum_required_balance,
             essential_payments_covered=result.essential_payments_covered is True,
-            virtual_savings=cash_savings, virtual_investment_value=invested_value,
+            virtual_savings=cash_savings, virtual_savings_interest=round(interest_float),
+            choice_cash_outflow=0 if needs_confirmation or invalid else sum(-c.amount for c in cash_items if c.amount < 0),
+            virtual_investment_value=invested_value,
             virtual_investment_profit_loss=invested_value-cost+realized_gain,
             virtual_investment_realized_profit_loss=realized_gain,
             investment_quantity=held_qty,
@@ -347,6 +364,9 @@ def compare_worlds(ds: Dataset, req: WorldCompareRequest) -> WorldCompareResult:
             purchase_delay_days=req.purchase_delay_days if sid == "purchase_delay" else 0,
             assumptions=notes,
         ))
+    reference = next(p for p in worlds if p.scenario_id == "no_purchase")
+    for p in worlds:
+        p.balance_delta_vs_no_purchase = {k: v - reference.future_balances[k] for k, v in p.future_balances.items()}
     return WorldCompareResult(
         dataset_id=ds.meta["dataset_id"], user_id=u.user_id, as_of=day,
         observation_start=start, observation_end=cutoff, baseline_source=spend_origin,

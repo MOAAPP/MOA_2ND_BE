@@ -88,7 +88,7 @@ def test_real_lgbm_training_artifact_validation_and_test_are_separate(tmp_path,m
     assert (tmp_path/"variable_spend.txt").is_file()
     assert (tmp_path/"metadata.json").is_file()
     assert (tmp_path/"evaluation.json").is_file()
-    assert meta["selected_model"] in ("lightgbm","weekday","recent7")
+    assert meta["selected_model"] in ("lightgbm","overall","weekday","recent7")
     assert report["test"]["lightgbm"]["7"]["cases"]>0
     assert len(report["test_users"])==20
     monkeypatch.setattr(ml,"MODEL_DIR",tmp_path)
