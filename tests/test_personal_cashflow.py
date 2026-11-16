@@ -63,7 +63,8 @@ def test_monthly_bill_can_cross_cash_buffer_even_before_salary():
     assert buy["minimum_balance"] == 70000
     assert buy["first_shortfall_date"] == (TODAY + timedelta(days=1)).isoformat()
     assert buy["minimum_balance_met"] is False
-    assert buy["essential_payments_covered"] is False
+    # Essential rent is charged first and covered; hypothetical purchase still breaks the buffer.
+    assert buy["essential_payments_covered"] is True
     assert keep["minimum_balance_met"] is True
     assert keep["essential_payments_covered"] is True
 
