@@ -14,6 +14,7 @@ from app.api.agent import router as agent_router
 from app.api.stage6 import router as stage6_router
 from app.api.ai import router as ai_router
 from app.api.learning_delivery import router as delivery_router
+from app.api.personal import router as personal_router
 from app.core.settings import CORS_ORIGINS
 from app.core.gateway import gateway_guard
 
@@ -82,6 +83,7 @@ app.include_router(agent_router)
 app.include_router(stage6_router)
 app.include_router(ai_router)
 app.include_router(delivery_router)
+app.include_router(personal_router)
 
 
 @app.get("/", include_in_schema=False)
