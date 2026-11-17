@@ -5,6 +5,10 @@ provider result, and never asks the LLM to calculate monetary values.
 """
 import json
 import os
+import logging
+from time import perf_counter
+
+logger = logging.getLogger(__name__)
 
 class AiUnavailable(RuntimeError):
     def __init__(self, code: str):
@@ -36,6 +40,8 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
     key, base, default_model = provider_settings()
     if not key:
         raise AiUnavailable("ai_api_key_missing")
+    started = perf_counter()
+    generation_status = "provider_call_failed"
     try:
         from openai import OpenAI
         headers = {}
@@ -82,8 +88,10 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
         result = json.loads(text)
         if not isinstance(result, dict):
             raise ValueError("response_not_an_object")
+        generation_status = "ok"
         return result, model or default_model
-    except AiUnavailable:
+    except AiUnavailable as exc:
+        generation_status = exc.code
         raise
     except Exception as exc:
         # Upstream SDK exceptions may include raw request text and URLs.
@@ -113,4 +121,9 @@ def structured_text(system: str, facts: dict, *, model: str | None = None,
             code = "provider_network_or_timeout"
         else:
             code = "provider_call_failed"
+        generation_status = code
         raise AiUnavailable(code) from exc
+    finally:
+        # No prompts, account identifiers, model output, keys, or amounts in observability logs.
+        logger.info(json.dumps({"event": "moa_ai_provider_request", "status": generation_status,
+                                "elapsed_ms": round((perf_counter() - started) * 1000, 1)}))
