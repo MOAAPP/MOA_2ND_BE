@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.services.ai_provider import configured, structured_text, AiUnavailable, provider_settings
+from app.services.ai_quality import FINANCIAL_AI_V10_POLICY, polite_sentences
 from app.services import state_store
 
 _LOCK = threading.RLock()
@@ -163,10 +164,12 @@ def _generate(ds, user_id: str, day: str):
 "answer":0, "explanation":"근거를 설명하는 한국어 문장"}.
 정답은 0~3, 선택지 4개는 모두 달라야 한다."""
         try:
-            raw, model = structured_text(prompt, facts,
+            raw, model = structured_text(prompt + "\n" + FINANCIAL_AI_V10_POLICY, facts,
                 model=os.getenv("MOA_QUIZ_MODEL") or provider_settings()[2],
                 max_tokens=440)
             quiz = GeneratedQuiz.model_validate(raw)
+            if not polite_sentences(quiz.question) or not polite_sentences(quiz.explanation):
+                raise ValueError("quiz_not_polite")
             source = "llm"
             generation_status = "live"
         except (AiUnavailable, ValueError) as exc:
