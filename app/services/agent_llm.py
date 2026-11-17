@@ -192,7 +192,7 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
                 raise ValueError("missing_json")
             content = content.strip()
             if content.startswith("```") and content.endswith("```"):
-                content = content[content.find("\\n") + 1:-3].strip()
+                content = content[content.find("\n") + 1:-3].strip()
             parsed = json.loads(content)
             if not isinstance(parsed, dict):
                 raise ValueError("not_object")
