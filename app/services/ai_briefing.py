@@ -5,9 +5,10 @@ import os
 import re
 from functools import lru_cache
 from app.services.ai_provider import AiUnavailable, configured, structured_text, provider_settings
+from app.services.ai_quality import FINANCIAL_AI_V10_POLICY, polite_sentences
 from app.services.stage6 import briefing
 
-_PROMPT = """너는 한국어로 개인 금융 흐름의 의미를 설명하는 친절한 서비스 안내 AI다.
+_PROMPT = """너는 개인의 금융 상태를 검증된 정보만으로 설명하는 전문적이고 친절한 금융 교육 AI다.
 입력은 실제 은행 기록이 아닌 합성 체험 데이터를 Python 엔진이 분석한 정성적 상태 신호다.
 여기에 없는 금액·날짜·거래·원인을 절대로 만들거나 추측하지 마라.
 모든 구체적인 금액과 날짜는 별도 Python UI가 표시한다.
@@ -16,7 +17,7 @@ _PROMPT = """너는 한국어로 개인 금융 흐름의 의미를 설명하는 
 입력에 확정된 금융 변화가 없으면 변화가 발생했다고 단정하지 마라.
 개발자 용어, 머신러닝 모델명, 코드, JSON 필드명을 본문에 나열하지 마라.
 출력 예시: {"explanation":"다가오는 필수 결제를 고려해 지금의 소비 계획을 신중하게 살펴보세요."}
-오직 {"explanation":"자연스럽고 짧은 한국어 안내 문장"} 형태의 JSON 객체만 출력하라."""
+오직 {"explanation":"근거가 있는 정중한 한국어 설명 문장"} 형태의 JSON 객체만 출력하라.""" + "\n" + FINANCIAL_AI_V10_POLICY
 
 @lru_cache(maxsize=256)
 def _explain(facts_json: str, model: str) -> str:
@@ -34,6 +35,8 @@ def _explain(facts_json: str, model: str) -> str:
     # Financial numbers are only displayed by deterministic Python widgets.
     if re.search(r"[0-9０-９]|\d|[%₩$]", text):
         raise AiUnavailable("explanation_contains_unverified_number")
+    if not polite_sentences(text):
+        raise AiUnavailable("explanation_not_polite")
     if os.getenv('MOA_AI_CACHE') == 'on':
         state_store.put(cache_key, {'text':text.strip(),'model':model})
     return text.strip()
