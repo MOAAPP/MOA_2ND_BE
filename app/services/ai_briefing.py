@@ -23,10 +23,10 @@ _PROMPT = """너는 개인의 금융 상태를 검증된 정보만으로 설명�
 def _explain(facts_json: str, model: str) -> str:
     from app.services import state_store
     import hashlib
-    cache_key = 'ai-cache/briefing-'+hashlib.sha256((model+facts_json).encode()).hexdigest()+'.json'
+    cache_key = 'ai-cache/briefing-v10-'+hashlib.sha256((model+facts_json).encode()).hexdigest()+'.json'
     if os.getenv('MOA_AI_CACHE') == 'on':
         cached = state_store.get(cache_key)
-        if cached.get('text'):
+        if polite_sentences(cached.get('text')):
             return cached['text']
     result, _ = structured_text(_PROMPT, json.loads(facts_json), model=model, max_tokens=160)
     text = result.get("explanation")
