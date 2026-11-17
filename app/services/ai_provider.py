@@ -14,7 +14,7 @@ from time import perf_counter
 logger = logging.getLogger("moa.ai_provider")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.__stdout__)
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
 logger.propagate = False
