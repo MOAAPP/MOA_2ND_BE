@@ -140,7 +140,7 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
                                 "AI에서 상품 정보를 받지 못했습니다. 다시 시도해주세요.", 502)
         output = output.strip()
         if output.startswith("```") and output.endswith("```"):
-            newline = output.find("\\n")
+            newline = output.find("\n")
             if newline != -1:
                 output = output[newline + 1:-3].strip()
         fields = VisionFields.model_validate(json.loads(output))
