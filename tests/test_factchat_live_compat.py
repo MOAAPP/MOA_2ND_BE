@@ -151,3 +151,25 @@ def test_vision_rejects_truncated_response_without_fake_success(monkeypatch):
     image.save(stream, "PNG")
     with pytest.raises(VisionProblem, match="AI 응답이 중간에 끊겼습니다"):
         asyncio.run(stage2_vision.analyze_image("S01", stream.getvalue(), "image/png"))
+
+
+def test_agent_drops_invented_product_candidate_id_that_would_cause_422(monkeypatch):
+    monkeypatch.setenv("MOA_AI_BASE_URL", "https://factchat-cloud.mindlogic.ai/v1/gateway")
+    call = SimpleNamespace(function=SimpleNamespace(
+        name="set_financial_conditions",
+        arguments=json.dumps({
+            "target_product_id": "invented-shoe-candidate",
+            "purchase_amount": 7000,
+            "purchase_required": False,
+            "allowed_payment_methods": ["debit"],
+        }),
+    ))
+    reply = _mock_completion(tool_calls=[call])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **kwargs: reply)))
+    conditions, _ = parse_conditions(
+        client, "claude-haiku-4-5-20251001",
+        "7000원짜리 운동화를 살까 고민이에요", "S01", date(2026, 11, 4),
+    )
+    assert conditions.purchase_amount == 7000
+    assert conditions.target_product_id is None

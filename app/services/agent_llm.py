@@ -204,6 +204,17 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
     # Identity/date are ALWAYS server-controlled, never the model's choice.
     allowed = set(PARSE_PARAMETERS["properties"])
     extracted = {k: v for k, v in extracted.items() if k in allowed and v is not None}
+    # FactChat may interpret a named product as a saved candidate ID, or
+    # invent an ID entirely. Only explicit opaque IDs present in the user's
+    # request can select stored purchase candidates; an ordinary product name
+    # is represented by purchase_amount alone.
+    target_id = extracted.get("target_product_id")
+    if target_id is not None and (
+        not isinstance(target_id, str)
+        or not re.fullmatch(r"[a-zA-Z0-9:_-]{5,100}", target_id)
+        or target_id not in goal_text
+    ):
+        extracted.pop("target_product_id", None)
     for key in ("purchase_amount", "minimum_balance", "required_savings_amount", "maximum_investment_amount", "maximum_spending_reduction"):
         amount = extracted.get(key)
         if amount and not _numbers_in_text(goal_text, amount):
