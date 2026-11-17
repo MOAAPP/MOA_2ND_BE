@@ -4,11 +4,13 @@ import hashlib
 import io
 import json
 import os
+import re
 import time
 from uuid import uuid4
 
 import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import ValidationError
 
 from app.stage2_models import VisionFields, VisionAnalysis
 from app.services.stage2_store import mutate_user, read_user, now_utc
@@ -83,6 +85,76 @@ def checkout_total(fields: VisionFields, *, conditional: bool = False) -> int | 
     return (price + fields.option_extra_cost) * fields.quantity + fields.shipping_fee
 
 
+
+def _validated_vision_output(output: object) -> VisionFields:
+    """Normalize a single model-returned JSON object, never fabricate prices.
+
+    Claude may wrap the object in prose/fences or include optional evidence
+    metadata with a noncanonical schema. Only explicitly returned, recognized
+    product fields are accepted, and every value still passes Pydantic.
+    """
+    if isinstance(output, list):
+        output = "".join(str(p.get("text", "")) for p in output
+                         if isinstance(p, dict) and p.get("type") in ("text", "output_text"))
+    if not isinstance(output, str) or not output.strip():
+        raise VisionProblem("vision_empty_response", "AI에서 상품 정보를 받지 못했습니다.", 502)
+    raw = output.strip()
+    if raw.startswith("```"):
+        newline = raw.find("\n")
+        if newline >= 0 and raw.endswith("```"):
+            raw = raw[newline + 1:-3].strip()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        # Accept one complete JSON object after a model-added introduction.
+        # No surrounding prose is ever used as product evidence.
+        start = raw.find("{")
+        if start < 0:
+            raise VisionProblem("vision_response_not_json", "상품 정보가 JSON 형식이 아닙니다.", 502)
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(raw[start:])
+        except (ValueError, TypeError) as exc:
+            raise VisionProblem("vision_response_not_json", "상품 정보가 JSON 형식이 아닙니다.", 502) from exc
+    if not isinstance(obj, dict):
+        raise VisionProblem("vision_response_not_object", "상품 정보의 형식을 확인할 수 없습니다.", 502)
+    for key in ("product", "fields", "result"):
+        nested = obj.get(key)
+        if isinstance(nested, dict) and not any(x in obj for x in
+               ("product_name", "selling_price", "main_product_candidate")):
+            obj = nested
+            break
+    allowed = set(VisionFields.model_fields)
+    product = {k: v for k, v in obj.items() if k in allowed}
+    if not any(product.get(k) is not None for k in
+               ("product_name", "selling_price", "main_product_candidate", "brand")):
+        raise VisionProblem("vision_product_not_detected", "이미지에서 구매 상품을 구분하지 못했습니다.", 422)
+    for key in ("selling_price", "original_price", "conditional_discount_price",
+                "option_extra_cost", "shipping_fee"):
+        val = product.get(key)
+        if isinstance(val, str):
+            match = re.fullmatch(r"\s*([0-9][0-9,]*)\s*(?:원|KRW|₩)?\s*", val, re.I)
+            if match:
+                product[key] = int(match.group(1).replace(",", ""))
+    product["needs_user_confirmation"] = True
+    try:
+        return VisionFields.model_validate(product)
+    except ValidationError:
+        # Optional coordinates/evidence must not invalidate an otherwise
+        # well-grounded product name/price. Flag unavailable evidence instead.
+        uncertain = product.get("uncertain_fields")
+        uncertain = [x for x in uncertain if isinstance(x, str)] if isinstance(uncertain, list) else []
+        for key in ("visual_evidence_regions", "alternative_candidates", "product_image_region"):
+            if key in product:
+                uncertain.append(key)
+                product.pop(key, None)
+        product["uncertain_fields"] = list(dict.fromkeys(uncertain))
+        try:
+            return VisionFields.model_validate(product)
+        except ValidationError as exc:
+            raise VisionProblem("vision_product_schema_invalid",
+                                "상품명과 가격 정보 형식을 확인할 수 없습니다.", 502) from exc
+
+
 async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAnalysis:
     normalized, mime = prepare_image(raw, content_type)
     model = (os.getenv("MOA_VISION_MODEL") or os.getenv("OPENAI_VISION_MODEL")
@@ -131,19 +203,7 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
         if choice.get("finish_reason") == "length":
             raise VisionProblem("vision_output_truncated",
                                 "AI 응답이 중간에 끊겼습니다. 다시 시도해주세요.", 502)
-        output = choice["message"]["content"]
-        if isinstance(output, list):
-            output = "".join(str(part.get("text") or "") for part in output
-                             if isinstance(part, dict) and part.get("type") in ("text", "output_text"))
-        if not isinstance(output, str) or not output.strip():
-            raise VisionProblem("vision_empty_response",
-                                "AI에서 상품 정보를 받지 못했습니다. 다시 시도해주세요.", 502)
-        output = output.strip()
-        if output.startswith("```") and output.endswith("```"):
-            newline = output.find("\n")
-            if newline != -1:
-                output = output[newline + 1:-3].strip()
-        fields = VisionFields.model_validate(json.loads(output))
+        fields = _validated_vision_output(choice["message"]["content"])
     except (httpx.TimeoutException,) as exc:
         raise VisionProblem("vision_timeout", "AI 분석 시간이 초과되었습니다.", 504) from exc
     except (httpx.HTTPError,) as exc:
