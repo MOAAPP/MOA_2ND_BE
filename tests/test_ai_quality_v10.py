@@ -33,7 +33,7 @@ def test_briefing_rejects_informal_llm_output():
     with patch("app.services.ai_briefing.structured_text", return_value=(
         {"explanation": "이번에는 그냥 사고 다음에 생각해."}, "mock"
     )):
-        with pytest.raises(AiUnavailable, match="explanation_not_polite"):
+        with pytest.raises(AiUnavailable, match="invalid_grounded_explanation"):
             _explain('{"additional_spending_capacity":"none"}', "mock")
     _explain.cache_clear()
 

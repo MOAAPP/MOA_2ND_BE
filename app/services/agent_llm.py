@@ -110,7 +110,7 @@ def _client():
 
 
 def _usage(response: Any) -> dict:
-    u = response.usage
+    u = getattr(response, 'usage', None)
     return {"input_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
             "output_tokens": int(getattr(u, "completion_tokens", 0) or 0)}
 
@@ -138,20 +138,69 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
         )},
         {"role": "user", "content": goal_text[:1200]},
     ]
-    response = client.chat.completions.create(
-        model=model, messages=messages, tools=[PARSE_TOOL],
-        tool_choice={"type": "function", "function": {"name": "set_financial_conditions"}},
-        temperature=0, max_tokens=450,
-    )
-    calls = response.choices[0].message.tool_calls or []
-    if len(calls) != 1 or calls[0].function.name != "set_financial_conditions":
-        raise AgentFailure("structured_conditions_tool_not_called")
+    # The gateway supports tool calls, but models can occasionally produce
+    # ordinary JSON instead of a forced function call. Try a strictly parsed
+    # JSON-only request once before failing the user's analysis.
+    factchat = "factchat-cloud.mindlogic.ai/v1/gateway" in (
+        os.getenv("MOA_AGENT_BASE_URL") or os.getenv("MOA_AI_BASE_URL") or "").lower()
+    response = None
+    tool_error = None
     try:
-        extracted = json.loads(calls[0].function.arguments)
-        if not isinstance(extracted, dict):
-            raise ValueError("expected object")
-    except (ValueError, TypeError) as exc:
-        raise AgentFailure("invalid_llm_conditions_json") from exc
+        response = client.chat.completions.create(
+            model=model, messages=messages, tools=[PARSE_TOOL],
+            tool_choice={"type": "function", "function": {"name": "set_financial_conditions"}},
+            temperature=0, max_tokens=1200 if factchat else 450,
+        )
+    except Exception as exc:
+        # Retry only possible gateway request/tool compatibility failures.
+        if getattr(exc, "status_code", None) not in (400, 422):
+            raise AgentFailure("conditions_provider_unavailable") from exc
+        tool_error = exc
+    calls = (getattr(response.choices[0].message, "tool_calls", None) or []) if response else []
+    extracted = None
+    if len(calls) == 1 and calls[0].function.name == "set_financial_conditions":
+        try:
+            data = json.loads(calls[0].function.arguments)
+            if isinstance(data, dict):
+                extracted = data
+        except (ValueError, TypeError):
+            pass
+    usage = _usage(response) if response else {"input_tokens": 0, "output_tokens": 0}
+    if extracted is None:
+        fallback_messages = [
+            {"role": "system", "content": (
+                "Extract ONLY explicitly stated Korean financial constraints. "
+                "Return a JSON object with keys from the following schema; "
+                "never invent dates, amounts, products or required savings. "
+                "Uncertain information belongs in confirmations_required. "
+                "Do not compute balances or recommend investments. "
+                + json.dumps(PARSE_PARAMETERS, ensure_ascii=False)
+            )},
+            {"role": "user", "content": goal_text[:1200]},
+        ]
+        try:
+            fallback = client.chat.completions.create(
+                model=model, messages=fallback_messages,
+                temperature=0, max_tokens=1200 if factchat else 700,
+            )
+            content = fallback.choices[0].message.content
+            if isinstance(content, list):
+                content = "".join(str(getattr(x, "text", "") or
+                                      (x.get("text", "") if isinstance(x, dict) else ""))
+                                  for x in content)
+            if not isinstance(content, str):
+                raise ValueError("missing_json")
+            content = content.strip()
+            if content.startswith("```") and content.endswith("```"):
+                content = content[content.find("\n") + 1:-3].strip()
+            parsed = json.loads(content)
+            if not isinstance(parsed, dict):
+                raise ValueError("not_object")
+            extracted = parsed
+            follow_up_usage = _usage(fallback)
+            usage = {k: usage[k] + follow_up_usage[k] for k in usage}
+        except Exception as exc:
+            raise AgentFailure("invalid_llm_conditions_json") from exc
     # Identity/date are ALWAYS server-controlled, never the model's choice.
     allowed = set(PARSE_PARAMETERS["properties"])
     extracted = {k: v for k, v in extracted.items() if k in allowed and v is not None}
@@ -174,7 +223,7 @@ def parse_conditions(client, model: str, goal_text: str, user_id: str, as_of: da
         extracted.setdefault("confirmations_required", []).append(
             "유지해야 할 저축 납입액을 숫자로 확인해 주세요.")
     conditions = GoalConditions(user_id=user_id, as_of=as_of, **extracted)
-    return conditions, _usage(response)
+    return conditions, usage
 
 
 def execute_tool(ds: Dataset, name: str, payload: dict, uid: str, as_of: date,
@@ -267,7 +316,7 @@ def run_agent(ds: Dataset, uid: str, as_of: date, goal: str, overrides: dict | N
             response = client.chat.completions.create(
                 model=model, messages=messages, tools=FINANCE_TOOLS,
                 tool_choice="required" if round_no == 0 else "auto",
-                temperature=0, max_tokens=500,
+                temperature=0, max_tokens=1200 if ("factchat-cloud.mindlogic.ai" in (os.getenv("MOA_AGENT_BASE_URL") or os.getenv("MOA_AI_BASE_URL") or "").lower()) else 500,
             )
             used = _usage(response)
             tokens = {k: tokens[k] + used[k] for k in tokens}

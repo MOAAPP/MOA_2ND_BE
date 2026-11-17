@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.stage2_models import VisionFields, VisionAnalysis
 from app.services.stage2_store import mutate_user, read_user, now_utc
+from app.services.ai_provider import logger
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_PIXELS = 18_000_000
@@ -95,9 +96,15 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
            or os.getenv("OPENAI_API_KEY", ""))
     if not key:
         raise VisionProblem("vision_api_key_missing", "백엔드 .env에 MOA_VISION_API_KEY 또는 MOA_AI_API_KEY를 설정해주세요.", 503)
+    base = (os.getenv("MOA_VISION_BASE_URL") or os.getenv("MOA_AI_BASE_URL")
+            or "https://api.openai.com/v1").rstrip("/")
+    factchat = "factchat-cloud.mindlogic.ai/v1/gateway" in base.lower()
+    # FactChat's OpenAI-compatible Claude gateway does not promise the old
+    # json_object response mode. Explicit JSON instructions and Pydantic
+    # validation remain mandatory.
     payload = {
-        "model": model, "temperature": 0, "max_tokens": 1600,
-        "response_format": {"type": "json_object"},
+        "model": model, "temperature": 0, "max_tokens": 2200 if factchat else 1600,
+        **({} if factchat else {"response_format": {"type": "json_object"}}),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": [
@@ -110,8 +117,6 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
     try:
         async with httpx.AsyncClient(timeout=45) as client:
             # Only the configured server-side provider receives screenshots.
-            base = (os.getenv("MOA_VISION_BASE_URL") or os.getenv("MOA_AI_BASE_URL")
-                    or "https://api.openai.com/v1").rstrip("/")
             res = await client.post(base + "/chat/completions",
                 headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
                 json=payload)
@@ -122,7 +127,22 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
         if res.status_code >= 400:
             raise VisionProblem("vision_upstream_error", "이미지 분석 API에 문제가 발생했습니다.", 502)
         data = res.json()
-        output = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise VisionProblem("vision_output_truncated",
+                                "AI 응답이 중간에 끊겼습니다. 다시 시도해주세요.", 502)
+        output = choice["message"]["content"]
+        if isinstance(output, list):
+            output = "".join(str(part.get("text") or "") for part in output
+                             if isinstance(part, dict) and part.get("type") in ("text", "output_text"))
+        if not isinstance(output, str) or not output.strip():
+            raise VisionProblem("vision_empty_response",
+                                "AI에서 상품 정보를 받지 못했습니다. 다시 시도해주세요.", 502)
+        output = output.strip()
+        if output.startswith("```") and output.endswith("```"):
+            newline = output.find("\n")
+            if newline != -1:
+                output = output[newline + 1:-3].strip()
         fields = VisionFields.model_validate(json.loads(output))
     except (httpx.TimeoutException,) as exc:
         raise VisionProblem("vision_timeout", "AI 분석 시간이 초과되었습니다.", 504) from exc
@@ -143,4 +163,7 @@ async def analyze_image(user_id: str, raw: bytes, content_type: str) -> VisionAn
         data["analyses"].append({"image_digest": digest, "model": model,
                                  "created_at": now_utc(), "response": analysis.model_dump(mode="json")})
     mutate_user(user_id, add)
+    # No image bytes, free text, user ID, prices or token included in logs.
+    logger.info(json.dumps({"event": "moa_ai_vision_request", "status": "ok",
+                            "elapsed_ms": analysis.latency_ms}))
     return analysis
