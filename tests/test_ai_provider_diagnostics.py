@@ -72,3 +72,30 @@ def test_gateway_error_type_can_identify_required_verification(monkeypatch):
         with pytest.raises(AiUnavailable) as result:
             structured_text("private",{})
     assert result.value.code=="provider_customer_verification_required"
+
+
+def test_ai_observability_emits_safe_json_without_secrets(monkeypatch):
+    """A failed provider call must be observable in Docker without sensitive data."""
+    import io
+    import json
+    from app.services.ai_provider import logger
+
+    monkeypatch.setenv("MOA_AI_API_KEY", "private-provider-key")
+    stream = io.StringIO()
+    handler = logger.handlers[0]
+    original_stream = handler.stream
+    try:
+        handler.setStream(stream)
+        with patch("openai.OpenAI") as cls:
+            cls.return_value.chat.completions.create.side_effect = UpstreamFailure(503)
+            with pytest.raises(AiUnavailable):
+                structured_text("do not print these instructions", {"amount": 12345678})
+    finally:
+        handler.setStream(original_stream)
+    record = json.loads(stream.getvalue().strip().splitlines()[-1])
+    assert record["event"] == "moa_ai_provider_request"
+    assert record["status"] == "provider_upstream_unavailable"
+    assert isinstance(record["elapsed_ms"], (int, float))
+    assert "private-provider-key" not in stream.getvalue()
+    assert "12345678" not in stream.getvalue()
+    assert "do not print these instructions" not in stream.getvalue()
