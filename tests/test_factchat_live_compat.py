@@ -173,3 +173,32 @@ def test_agent_drops_invented_product_candidate_id_that_would_cause_422(monkeypa
     )
     assert conditions.purchase_amount == 7000
     assert conditions.target_product_id is None
+
+
+def test_vision_extracts_json_after_claude_prose_and_validates_price():
+    fields = stage2_vision._validated_vision_output(
+        'Here is the product information:\n```json\n'
+        '{"product":{"product_name":"데모 가방","selling_price":"12,000원",'
+        '"quantity":1,"shipping_fee":0,"option_extra_cost":0}}\n```'
+    )
+    assert fields.product_name == "데모 가방"
+    assert fields.selling_price == 12000
+    assert fields.needs_user_confirmation is True
+    assert stage2_vision.checkout_total(fields) == 12000
+
+
+def test_vision_discards_only_unverifiable_optional_evidence():
+    fields = stage2_vision._validated_vision_output(json.dumps({
+        "product_name": "가방", "selling_price": 12000,
+        "visual_evidence_regions": [{"field": "price", "region": {"x": 999}}],
+        "needs_user_confirmation": False,
+    }))
+    assert fields.product_name == "가방"
+    assert fields.selling_price == 12000
+    assert "visual_evidence_regions" in fields.uncertain_fields
+    assert fields.needs_user_confirmation is True
+
+
+def test_vision_never_reports_success_for_unreadable_empty_response():
+    with pytest.raises(VisionProblem, match="이미지에서 구매 상품을 구분하지 못했습니다"):
+        stage2_vision._validated_vision_output('{"product_name":null,"selling_price":null}')
