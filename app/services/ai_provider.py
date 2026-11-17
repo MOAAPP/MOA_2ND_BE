@@ -6,9 +6,18 @@ provider result, and never asks the LLM to calculate monetary values.
 import json
 import os
 import logging
+import sys
 from time import perf_counter
 
-logger = logging.getLogger(__name__)
+# Emit privacy-safe model call diagnostics to Docker stdout even when the
+# ASGI server does not configure a handler for application modules.
+logger = logging.getLogger("moa.ai_provider")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+logger.propagate = False
 
 class AiUnavailable(RuntimeError):
     def __init__(self, code: str):
