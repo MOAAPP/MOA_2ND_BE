@@ -27,10 +27,10 @@ def _verified_explanation(value: object) -> str | None:
     """
     if not isinstance(value, str):
         return None
-    text = re.sub(r"\\s+", " ", value).strip()
+    text = re.sub(r"\s+", " ", value).strip()
     if not text or len(text) > 600:
         return None
-    if re.search(r"[0-9０-９]|\\d|[%₩$]", text) or not polite_sentences(text):
+    if re.search(r"[0-9０-９]|\d|[%₩$]", text) or not polite_sentences(text):
         return None
     if 10 <= len(text) <= 100:
         return text
@@ -57,7 +57,7 @@ def _explain(facts_json: str, model: str) -> str:
     if not explanation:
         # One bounded retry for wrong/missing field, very short, or overly long
         # malformed prose. Never turn an invalid result into a fake LLM success.
-        retry_prompt = (_PROMPT + "\\n앞선 설명이 형식 검증에 실패했습니다. "
+        retry_prompt = (_PROMPT + "\n앞선 설명이 형식 검증에 실패했습니다. "
                         "반드시 explanation 필드에, 숫자 없이 완성된 존댓말 한 문장만 "
                         "30~70자로 작성하세요. JSON 객체만 출력하세요.")
         retry, _ = structured_text(retry_prompt, facts, model=model, max_tokens=180)
