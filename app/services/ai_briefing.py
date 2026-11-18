@@ -5,7 +5,7 @@ import os
 import re
 from functools import lru_cache
 from app.services.ai_provider import AiUnavailable, configured, structured_text, provider_settings
-from app.services.ai_quality import FINANCIAL_AI_V10_POLICY, polite_sentences
+from app.services.ai_quality import FINANCIAL_AI_V10_POLICY, has_numeric_content, polite_sentences
 from app.services.stage6 import briefing
 
 _PROMPT = """너는 개인의 금융 상태를 검증된 정보만으로 설명하는 전문적이고 친절한 금융 교육 AI다.
@@ -30,7 +30,7 @@ def _verified_explanation(value: object) -> str | None:
     text = re.sub(r"\s+", " ", value).strip()
     if not text or len(text) > 600:
         return None
-    if re.search(r"[0-9０-９]|\d|[%₩$]", text) or not polite_sentences(text):
+    if has_numeric_content(text) or not polite_sentences(text):
         return None
     if 10 <= len(text) <= 100:
         return text
