@@ -34,3 +34,21 @@ def polite_sentences(text: object) -> bool:
         and re.search(r"(?:요|니다|니까|세요|십시오|죠|까요)$", sentence)
         for sentence in sentences
     )
+
+
+_KOREAN_NUMERAL = "[영공일이삼사오육칠팔구십백천만억조]"
+_NUMERIC = re.compile(
+    r"[0-9０-９%％₩$]"
+    rf"|{_KOREAN_NUMERAL}+\s*(?:원|퍼센트|프로)"
+    rf"|{_KOREAN_NUMERAL}+\s*(?:만|천|억)\s*원"
+)
+
+
+def has_numeric_content(text: object) -> bool:
+    """True if a model sentence mentions any amount, ratio or currency.
+
+    Financial numbers are rendered by Python; model prose must stay number-free.
+    Catches Arabic/full-width digits, Korean-spelled amounts (삼만원, 오천 원)
+    and percent words, without flagging ordinary words such as 이번·한 번·이만큼.
+    """
+    return isinstance(text, str) and bool(_NUMERIC.search(text))
